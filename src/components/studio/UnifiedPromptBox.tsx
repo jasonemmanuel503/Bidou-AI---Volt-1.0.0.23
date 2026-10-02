@@ -20,6 +20,7 @@ import {
   CornerDownLeft,
   Lock,
   Settings,
+  Gift,
 } from 'lucide-react';
 import { AiModelConfig, GenerationType, PlanTier, RestoreRequest } from '../../types';
 export type { RestoreRequest };
@@ -33,6 +34,8 @@ import { getEnhanceErrorPresentation, EnhanceErrorPresentation } from '../../lib
 import type { PlanLimitInfo } from '../../services/apiClient';
 import { toast } from '../../services/toast';
 import { genreOptions, tonalityOptions } from '../../services/musicStyles';
+import { OccasionSelection, getOccasion, getSub } from '../../services/occasions';
+import { OccasionPickerOverlay } from './OccasionPickerOverlay';
 
 export interface EnhancePromptContext {
   rawPrompt: string;
@@ -66,8 +69,8 @@ export interface TabState {
   musicGenre: string;
   musicTonality: string;
   musicLyrics: string;
-  musicLanguage?: string;
-  musicOccasion?: any;
+  musicLanguage: string;
+  musicOccasion: OccasionSelection | null;
   coverArtUrl: string | null;
 }
 
@@ -136,7 +139,7 @@ export const makeDefaultTabState = (
     musicGenre: 'Makossa',
     musicTonality: 'Celebratory & Energetic',
     musicLyrics: '',
-    musicLanguage: 'French / English / Camfranglais',
+    musicLanguage: 'English',
     musicOccasion: null,
     coverArtUrl: null,
   };
@@ -448,6 +451,8 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
             musicTonality: settings.musicTonality || existing.musicTonality,
             musicTitle: settings.musicTitle || existing.musicTitle,
             musicLyrics: settings.musicLyrics || existing.musicLyrics,
+            musicLanguage: settings.musicLanguage || existing.musicLanguage,
+            musicOccasion: settings.musicOccasion ?? existing.musicOccasion,
             referenceFileName: settings.referenceFileName || '',
             referenceFileUrl: null, // Binary file cannot be restored from snapshot
           },
@@ -800,17 +805,23 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
   };
 
   // Handle Music Lyrics Generation & Rewrite
-  const handleGenerateLyricsClick = async () => {
+  const handleGenerateLyricsClick = async (overrideArgs?: {
+    title?: string;
+    genre?: string;
+    tonality?: string;
+    language?: string;
+    occasion?: OccasionSelection | null;
+  }) => {
     setIsGeneratingLyrics(true);
     setLyricsError(null);
     try {
       const generated = await onGenerateLyrics({
-        title: current.musicTitle || 'Chant de Joie',
-        genre: current.musicGenre,
-        tonality: current.musicTonality,
+        title: overrideArgs?.title ?? current.musicTitle ?? 'Chant de Joie',
+        genre: overrideArgs?.genre ?? current.musicGenre,
+        tonality: overrideArgs?.tonality ?? current.musicTonality,
         description: current.prompt,
-        language: current.musicLanguage,
-        occasion: current.musicOccasion,
+        language: overrideArgs?.language ?? current.musicLanguage,
+        occasion: overrideArgs?.occasion !== undefined ? overrideArgs.occasion : current.musicOccasion,
       });
       patchTab({ musicLyrics: generated });
     } catch (err: any) {
@@ -818,6 +829,46 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
       setLyricsError(err?.message || 'Failed to generate lyrics. Please check your connection and try again.');
     } finally {
       setIsGeneratingLyrics(false);
+    }
+  };
+
+  // Occasion Picker modal state & handlers
+  const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
+
+  const activeOccasionDef = current.musicOccasion ? getOccasion(current.musicOccasion.id) : undefined;
+  const activeOccasionSub = getSub(activeOccasionDef, current.musicOccasion?.subId);
+  const availableGenreOptions = activeOccasionDef
+    ? genreOptions(current.musicGenre).filter(
+        (o) => activeOccasionDef.genreChoices.includes(o.value) || o.value === current.musicGenre
+      )
+    : genreOptions(current.musicGenre);
+
+  const handleApplyOccasion = (r: {
+    selection: OccasionSelection;
+    genre: string;
+    tonality: string;
+    title: string;
+    language: string;
+    writeLyrics: boolean;
+  }) => {
+    patchTab({
+      musicOccasion: r.selection,
+      musicGenre: r.genre,
+      musicTonality: r.tonality,
+      musicLanguage: r.language,
+      musicTitle: r.title,
+    });
+    setIsTrackDetailsOpen(true);
+    if (r.writeLyrics) {
+      setTimeout(() => {
+        handleGenerateLyricsClick({
+          title: r.title,
+          genre: r.genre,
+          tonality: r.tonality,
+          language: r.language,
+          occasion: r.selection,
+        });
+      }, 50);
     }
   };
 
@@ -897,8 +948,9 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
           clientSettings,
         });
       } else if (activeTab === 'music') {
+        const musicPromptToSend = finalPrompt || (current.musicOccasion ? (snapshot.musicTitle || 'Song for occasion') : finalPrompt);
         await onGenerateMusic({
-          prompt: finalPrompt,
+          prompt: musicPromptToSend,
           enhancedPrompt,
           modelId: activeModel?.id || snapshot.modelId,
           genre: snapshot.musicGenre,
@@ -929,6 +981,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         referenceFileName: '',
         musicTitle: activeTab === 'music' ? '' : current.musicTitle,
         musicLyrics: activeTab === 'music' ? '' : current.musicLyrics,
+        musicOccasion: activeTab === 'music' ? null : current.musicOccasion,
       });
       setEnhanceHistory([]);
       setEnhanceError(null);
@@ -939,7 +992,11 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
   };
 
   const handleTriggerGenerate = async () => {
-    if (!current.prompt.trim() || isGenerating) return;
+    const hasValidInput = activeTab === 'music'
+      ? Boolean(current.prompt.trim() || current.musicLyrics.trim() || current.musicOccasion)
+      : Boolean(current.prompt.trim());
+
+    if (!hasValidInput || isGenerating) return;
 
     if (isPromoBlockedOnly) {
       onInsufficientCredits?.({
@@ -1054,6 +1111,9 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
       case 'video':
         return 'What video would you like to create? (e.g. Cinematic aerial shot over Mount Cameroon...)';
       case 'music':
+        if (current.musicOccasion) {
+          return 'Tell us anything else about the song (optional)';
+        }
         return 'What music would you like to compose? (e.g. Upbeat Makossa rhythm with live brass...)';
       case 'image':
       default:
@@ -1203,6 +1263,74 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         {/* ========================================================================= */}
         {activeTab === 'music' && (
           <div className="flex flex-col gap-2">
+            {/* Occasion Entry Button / Active Chip */}
+            {!current.musicOccasion ? (
+              <button
+                type="button"
+                onClick={() => setIsOccasionModalOpen(true)}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl glass-panel border border-[#F86A00]/25 hover:border-[#F86A00]/50 bg-gradient-to-r from-[#F86A00]/10 via-[#F86A00]/5 to-transparent hover:from-[#F86A00]/15 transition-all text-left group cursor-pointer"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 rounded-xl bg-[#F86A00]/15 text-[#F86A00] group-hover:scale-105 transition-transform shrink-0">
+                    <Gift size={16} />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold text-[#1A1A1E] dark:text-[#F5F5F7] group-hover:text-[#F86A00] transition-colors truncate">
+                      Create for an occasion
+                    </span>
+                    <span className="text-[11px] text-[#6B6B75] dark:text-[#A0A0AA] truncate">
+                      Birthday, wedding, funeral, graduation…
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-semibold text-[#F86A00] px-2.5 py-1 rounded-lg bg-[#F86A00]/10 group-hover:bg-[#F86A00]/20 transition-colors shrink-0 ml-2">
+                  Choose
+                </span>
+              </button>
+            ) : (
+              <div className="flex items-center justify-between p-2.5 px-3.5 rounded-2xl glass-panel border border-[#F86A00]/40 bg-[#F86A00]/10">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-2 rounded-xl bg-[#F86A00]/20 text-[#F86A00] shrink-0">
+                    <Gift size={15} />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold text-[#1A1A1E] dark:text-[#F5F5F7] truncate">
+                      {activeOccasionDef?.label || 'Occasion'}
+                      {activeOccasionSub ? ` — ${activeOccasionSub.label}` : ''}
+                    </span>
+                    <span className="text-[11px] text-[#6B6B75] dark:text-[#A0A0AA] truncate">
+                      {current.musicOccasion.details.recipientName ||
+                        current.musicOccasion.details.coupleNames ||
+                        current.musicOccasion.details.deceasedName ||
+                        current.musicOccasion.details.babyName ||
+                        current.musicOccasion.details.businessName ||
+                        current.musicOccasion.details.teamName ||
+                        activeOccasionDef?.blurb ||
+                        'Custom details applied'}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsOccasionModalOpen(true)}
+                    className="px-2.5 py-1 rounded-lg text-xs font-semibold text-[#F86A00] hover:bg-[#F86A00]/15 transition-colors cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patchTab({ musicOccasion: null })}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-[#6B6B75] dark:text-[#A0A0AA] hover:text-[#E74C3C] hover:bg-[#E74C3C]/10 transition-colors cursor-pointer"
+                    title="Clear occasion"
+                  >
+                    <X size={12} />
+                    <span>Clear</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setIsTrackDetailsOpen(!isTrackDetailsOpen)}
@@ -1244,7 +1372,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                   <div className="flex flex-col">
                     <CustomSelect
                       label="African Genre"
-                      options={genreOptions(current.musicGenre)}
+                      options={availableGenreOptions}
                       value={current.musicGenre}
                       onChange={(val) => patchTab({ musicGenre: val })}
                     />
@@ -1282,7 +1410,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={handleGenerateLyricsClick}
+                        onClick={() => handleGenerateLyricsClick()}
                         disabled={isGeneratingLyrics}
                         className="flex items-center gap-1 text-[11px] font-bold text-brand-gradient hover:opacity-80 transition-opacity cursor-pointer disabled:opacity-50"
                       >
@@ -1760,71 +1888,78 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
               <span className="hidden md:inline">Enhance</span>
             </button>
 
-            <button
-              type="button"
-              id="unified-generate-btn"
-              onClick={handleTriggerGenerate}
-              disabled={!current.prompt.trim() || isGenerating || (isInsufficient && !isPromoBlockedOnly)}
-              aria-disabled={!current.prompt.trim() || isGenerating || (isInsufficient && !isPromoBlockedOnly)}
-              aria-busy={isGenerating}
-              aria-label={
-                activeTab === 'image'
-                  ? 'Generate image'
-                  : activeTab === 'video'
-                  ? 'Generate video'
-                  : 'Compose track'
-              }
-              title={
-                isPromoBlockedOnly
-                  ? 'Requires paid credits — click to top up'
-                  : isInsufficient
-                  ? `Not enough credits. Need ${shortfall.toLocaleString()} more`
-                  : activeTab === 'image'
-                  ? 'Generate image'
-                  : activeTab === 'video'
-                  ? 'Generate video'
-                  : 'Compose track'
-              }
-              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full shrink-0 flex items-center justify-center transition-all ${
-                isPromoBlockedOnly
-                  ? 'bg-amber-500/90 text-white border border-amber-400/40 shadow-sm cursor-pointer'
-                  : isInsufficient
-                  ? 'bg-rose-600/80 text-white/90 border border-rose-500/40 shadow-sm shadow-rose-600/20 cursor-not-allowed opacity-75'
-                  : !current.prompt.trim() || isGenerating
-                  ? 'bg-brand-gradient text-white opacity-40 cursor-not-allowed'
-                  : 'bg-brand-gradient text-white shadow-md shadow-[#F86A00]/25 hover:opacity-95 active:scale-95 cursor-pointer'
-              }`}
-            >
-              {isGenerating ? (
-                <svg
-                  className="animate-spin w-[18px] h-[18px] text-white"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
+            {(() => {
+              const canGenerate = activeTab === 'music'
+                ? Boolean(current.prompt.trim() || current.musicLyrics.trim() || current.musicOccasion)
+                : Boolean(current.prompt.trim());
+              return (
+                <button
+                  type="button"
+                  id="unified-generate-btn"
+                  onClick={handleTriggerGenerate}
+                  disabled={!canGenerate || isGenerating || (isInsufficient && !isPromoBlockedOnly)}
+                  aria-disabled={!canGenerate || isGenerating || (isInsufficient && !isPromoBlockedOnly)}
+                  aria-busy={isGenerating}
+                  aria-label={
+                    activeTab === 'image'
+                      ? 'Generate image'
+                      : activeTab === 'video'
+                      ? 'Generate video'
+                      : 'Compose track'
+                  }
+                  title={
+                    isPromoBlockedOnly
+                      ? 'Requires paid credits — click to top up'
+                      : isInsufficient
+                      ? `Not enough credits. Need ${shortfall.toLocaleString()} more`
+                      : activeTab === 'image'
+                      ? 'Generate image'
+                      : activeTab === 'video'
+                      ? 'Generate video'
+                      : 'Compose track'
+                  }
+                  className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full shrink-0 flex items-center justify-center transition-all ${
+                    isPromoBlockedOnly
+                      ? 'bg-amber-500/90 text-white border border-amber-400/40 shadow-sm cursor-pointer'
+                      : isInsufficient
+                      ? 'bg-rose-600/80 text-white/90 border border-rose-500/40 shadow-sm shadow-rose-600/20 cursor-not-allowed opacity-75'
+                      : !canGenerate || isGenerating
+                      ? 'bg-brand-gradient text-white opacity-40 cursor-not-allowed'
+                      : 'bg-brand-gradient text-white shadow-md shadow-[#F86A00]/25 hover:opacity-95 active:scale-95 cursor-pointer'
+                  }`}
                 >
-                  <circle
-                    cx="12"
-                    cy="12"
-                    r="9"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    opacity="0.25"
-                  />
-                  <circle
-                    cx="12"
-                    cy="12"
-                    r="9"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeDasharray="56"
-                    strokeDashoffset="42"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              ) : (
-                <CornerDownLeft size={18} className="text-white" />
-              )}
-            </button>
+                  {isGenerating ? (
+                    <svg
+                      className="animate-spin w-[18px] h-[18px] text-white"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="9"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        opacity="0.25"
+                      />
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="9"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeDasharray="56"
+                        strokeDashoffset="42"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  ) : (
+                    <CornerDownLeft size={18} className="text-white" />
+                  )}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -2316,6 +2451,15 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         </AnimatePresence>,
         document.body
       )}
+
+      {/* Occasion Picker Overlay Modal */}
+      <OccasionPickerOverlay
+        isOpen={isOccasionModalOpen}
+        initial={current.musicOccasion}
+        currentLanguage={current.musicLanguage || 'English'}
+        onClose={() => setIsOccasionModalOpen(false)}
+        onApply={handleApplyOccasion}
+      />
     </GradientBorder>
   );
 };

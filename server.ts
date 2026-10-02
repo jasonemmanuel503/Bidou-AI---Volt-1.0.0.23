@@ -4,7 +4,6 @@ import path from 'path';
 import crypto from 'crypto';
 import { pipeline, Readable } from 'stream';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 import { ModelRouter } from './src/services/modelRouter';
@@ -16,9 +15,12 @@ import { saveGenerationAsset } from './server/storage';
 import { signMediaUrl, verifyMediaSignature } from './server/mediaSigning';
 import {
   sanitizeOccasionInput,
+  resolveGenreForOccasion,
   buildOccasionEnhancerContext,
   composeLyrics,
 } from './server/occasionPrompts';
+import { getOccasion, getSub, LANGUAGES } from './src/services/occasions';
+import { getGeminiClient } from './server/gemini';
 
 import {
   getSupabaseAdmin,
@@ -587,19 +589,6 @@ function getTierVariantCap(planTier: PlanTier): number {
   }
 }
 
-// Lazy initialization of Gemini client (Prompt enhancement & lyrics)
-let genAI: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
-  if (!genAI) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn('GEMINI_API_KEY is not set. Using fallback simulation for prompt enhancement.');
-    }
-    genAI = new GoogleGenAI({ apiKey: apiKey || 'dummy-key' });
-  }
-  return genAI;
-}
-
 // ---------------------------------------------------------------------------
 // Health & Provider Endpoints
 // ---------------------------------------------------------------------------
@@ -1064,6 +1053,14 @@ app.post('/api/ai/generate', async (req, res) => {
     const cleanTitle = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim().slice(0, 80) : undefined;
     const cleanLyrics = typeof lyrics === 'string' ? lyrics.slice(0, 5000) : undefined;
 
+    const rawLanguage = req.body.language || req.body.clientSettings?.musicLanguage || req.body.clientSettings?.language;
+    const language = (LANGUAGES as readonly string[]).includes(rawLanguage) ? rawLanguage : undefined;
+
+    const effectiveGenre = resolveGenreForOccasion(occasion, genre);
+    const occDef = occasion ? getOccasion(occasion.id) : undefined;
+    const occSub = getSub(occDef, occasion?.subId);
+    const effectiveTonality = tonality || occSub?.tonality || occDef?.tonality;
+
     // 3.2 Duration and resolution are allowed by video_options of THAT model -> else INVALID_OPTIONS
     if (rawModel.generation_type === 'video' && rawModel.video_options) {
       const reqDuration = Number(durationSeconds);
@@ -1292,8 +1289,8 @@ app.post('/api/ai/generate', async (req, res) => {
       resolution: effectiveResolution || null,
       duration_seconds: effectiveDuration ? parseInt(String(effectiveDuration), 10) : null,
       batch_count: n,
-      genre,
-      tonality,
+      genre: effectiveGenre,
+      tonality: effectiveTonality,
       lyrics: finalLyrics,
       cover_art_url: coverArtUrl,
       credits_reserved: quote.totalCost,
@@ -1434,8 +1431,8 @@ app.post('/api/ai/generate', async (req, res) => {
       resolution: effectiveResolution,
       duration_seconds: effectiveDuration ? parseInt(String(effectiveDuration), 10) : null,
       batch_count: n,
-      genre,
-      tonality,
+      genre: effectiveGenre,
+      tonality: effectiveTonality,
       lyrics: finalLyrics,
       cover_art_url: coverArtUrl,
       credits_reserved: quote.totalCost,
@@ -1456,14 +1453,15 @@ app.post('/api/ai/generate', async (req, res) => {
       prompt,
       title: finalTitle,
       occasion,
+      language: language || occasion?.details.language,
       enhancedPrompt,
       negativePrompt,
       aspectRatio,
       resolution: effectiveResolution,
       durationSeconds: effectiveDuration ? parseInt(String(effectiveDuration), 10) : undefined,
       audioFlag: audioFlag !== false,
-      genre,
-      tonality,
+      genre: effectiveGenre,
+      tonality: effectiveTonality,
       lyrics: finalLyrics,
       coverArtUrl,
       model: selectedModel,

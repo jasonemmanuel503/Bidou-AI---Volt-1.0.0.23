@@ -4,6 +4,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { GenerationJob, GenerationJobVariant, GenerationType } from '../../types';
 import { MusicContainerTier, formatRelativeTime, formatMusicModelName } from '../../lib/musicMeta';
 import { MusicTrackRow } from './MusicTrackRow';
+import { buildCardPrompt } from '../../services/occasions';
 
 export interface MusicJobGroupProps {
   job: GenerationJob;
@@ -114,6 +115,19 @@ export const MusicJobGroup: React.FC<MusicJobGroupProps> = ({
             >
               <Sparkles size={13} className="text-[#F86A00] shrink-0" aria-hidden="true" />
               <span className="hidden sm:inline">Remix</span>
+            </button>
+          )}
+
+          {job.occasion_id && onRemixPrompt && !isGroupFailed && (
+            <button
+              type="button"
+              onClick={() => onRemixPrompt(buildCardPrompt(job.occasion_id!, (job.occasion_details as any) || {}), 'image')}
+              title="Create matching card"
+              aria-label="Create matching card"
+              className="min-h-[32px] [@media(pointer:coarse)]:min-h-[44px] px-2.5 py-1 rounded-lg text-[11px] font-medium text-[#F86A00] hover:bg-[#F86A00]/10 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FF8800]"
+            >
+              <Sparkles size={13} className="text-[#F86A00] shrink-0" aria-hidden="true" />
+              <span className="hidden sm:inline">Create matching card</span>
             </button>
           )}
 

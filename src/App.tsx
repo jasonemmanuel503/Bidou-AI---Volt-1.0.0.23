@@ -925,6 +925,8 @@ export default function App() {
           tonality: metadata?.tonality,
           lyrics: metadata?.lyrics,
           title: metadata?.title,
+          occasion: (metadata as any)?.occasion,
+          language: (metadata as any)?.language,
           clientSettings: (metadata as any)?.clientSettings,
         }),
       });
@@ -1551,6 +1553,8 @@ export default function App() {
     tonality: string;
     lyrics?: string;
     title?: string;
+    occasion?: any;
+    language?: string;
     variantCount?: number;
     clientSettings?: any;
   }) => {
@@ -1567,6 +1571,8 @@ export default function App() {
         tonality: p.tonality,
         lyrics: p.lyrics,
         title: p.title,
+        occasion: p.occasion,
+        language: p.language,
         original_prompt: p.enhancedPrompt ? p.prompt : undefined,
         clientSettings: p.clientSettings,
       },

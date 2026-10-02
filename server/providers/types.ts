@@ -20,6 +20,7 @@ export interface GenerationTaskContext {
   title?: string;
   upstreamModel?: string;                 // resolved from model_suppliers, music only
   occasion?: { id: string; subId?: string; details: Record<string, string> } | null;
+  language?: string;
   extraTags?: string[];
   enhancedPrompt?: string;
   negativePrompt?: string;
