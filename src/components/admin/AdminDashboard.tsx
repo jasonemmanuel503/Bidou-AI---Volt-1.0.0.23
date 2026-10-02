@@ -50,7 +50,6 @@ import { SupplierProfitControlPanel } from './SupplierProfitControlPanel';
 
 export interface AdminDashboardProps {
   models: AiModelConfig[];
-  onUpdateModel: (updated: AiModelConfig) => void;
   onRefreshModels?: () => void;
   transactions: CreditTransaction[];
   payments: FuturaPayPayment[];
@@ -61,7 +60,6 @@ export interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   models,
-  onUpdateModel,
   onRefreshModels,
   transactions,
   payments,
@@ -278,19 +276,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       credit_cost: newCreditCost,
       max_concurrent_variants: safeVariants,
     };
-    onUpdateModel(updated);
     setSelectedModel(updated);
-  };
-
-  const handleToggleActive = (model: AiModelConfig) => {
-    if (!model.licensing_verified && !model.active) {
-      alert('LICENSING HARD GATE: Cannot activate model without verified commercial API licensing agreement.');
-      return;
-    }
-    onUpdateModel({
-      ...model,
-      active: !model.active,
-    });
   };
 
   return (
@@ -355,29 +341,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <CheckCircle size={12} />
                           <span>Verified</span>
                         </span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-[10px] font-bold text-[#FF4B4B] bg-[#FF4B4B]/10 px-2 py-0.5 rounded-full">
-                          <Lock size={12} />
-                          <span>Unlicensed (Hard Gate)</span>
-                        </span>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleActive(model);
-                        }}
-                        className={`w-11 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${
-                          model.active ? 'bg-[#2ECC71]' : 'bg-black/20 dark:bg-white/20'
-                        }`}
-                      >
-                        <div
-                          className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                            model.active ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -442,6 +406,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       Save
                     </button>
                   </div>
+                  <span className="text-[10px] text-amber-500 font-medium">
+                    Preview only — not saved to the database
+                  </span>
                   <span className="text-[10px] text-[#6B6B75]">
                     Constrains maximum parallel takes/variations generated per prompt (1 to 4).
                   </span>

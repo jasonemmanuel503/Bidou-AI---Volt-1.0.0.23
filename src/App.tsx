@@ -30,6 +30,7 @@ import { clearMediaUrlCache } from './services/media';
 import { setCurrentUserId, getAuthToken } from './services/authToken';
 import { newId } from './services/ids';
 import { useProjects } from './hooks/useProjects';
+import { useModelCatalog } from './hooks/useModelCatalog';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { TIER_VARIANT_CAP } from './services/tiers';
@@ -192,9 +193,7 @@ export default function App() {
   // Services instantiation
   const creditLedger = useMemo(() => new CreditLedger(), []);
   const futuraPayService = useMemo(() => new FuturaPayService(creditLedger), [creditLedger]);
-  const [models, setModels] = useState<AiModelConfig[]>(INITIAL_AI_MODELS);
-  const [planLimits, setPlanLimits] = useState<Record<PlanTier, PlanLimitInfo> | undefined>(undefined);
-  const [providerEnv, setProviderEnv] = useState<'dev' | 'prod'>('prod');
+  const { models, setModels, planLimits, providerEnv, refresh: refreshModels } = useModelCatalog();
   const modelRouter = useMemo(() => new ModelRouter(models), [models]);
   const [providerHealthMap, setProviderHealthMap] = useState<Record<string, boolean>>({
     google: true,
@@ -203,30 +202,6 @@ export default function App() {
     bytedance: true,
     elevenlabs: true,
   });
-
-  // Step 1: Load models from GET /api/models at app start, refresh every 5 minutes, fallback to INITIAL_AI_MODELS
-  const refreshModels = useCallback(async () => {
-    try {
-      const data = await fetchPublicModels();
-      if (data && Array.isArray(data.models) && data.models.length > 0) {
-        setModels(data.models as AiModelConfig[]);
-      }
-      if (data?.plan_limits) {
-        setPlanLimits(data.plan_limits);
-      }
-      if (data?.provider_env === 'dev' || data?.provider_env === 'prod') {
-        setProviderEnv(data.provider_env);
-      }
-    } catch (err) {
-      console.warn('[App] /api/models unavailable, using INITIAL_AI_MODELS fallback:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshModels();
-    const interval = window.setInterval(refreshModels, 5 * 60 * 1000);
-    return () => window.clearInterval(interval);
-  }, [refreshModels]);
 
   // Reactive wallet state (two-bucket paid_balance + promo_balance)
   const [wallet, setWallet] = useState<CreditWallet>(() => {
@@ -1256,11 +1231,6 @@ export default function App() {
     }
   };
 
-  const handleUpdateModel = (updated: AiModelConfig) => {
-    setModels((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-    modelRouter.updateModels(models);
-  };
-
   const handleCreateFolder = async (name: string): Promise<any> => {
     return await createProject(name);
   };
@@ -1316,7 +1286,6 @@ export default function App() {
     return (
       <AdminDashboard
         models={models}
-        onUpdateModel={handleUpdateModel}
         onRefreshModels={refreshModels}
         transactions={creditLedger.getTransactions()}
         payments={futuraPayService.getPayments()}

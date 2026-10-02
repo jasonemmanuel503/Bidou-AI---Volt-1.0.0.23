@@ -46,7 +46,9 @@ export interface PublicModelItem {
 export interface PublicModelsResponse {
   provider_env: 'dev' | 'prod';
   mode: 'live' | 'demo';
-  plan_limits: Record<PlanTier, PlanLimitInfo>;
+  plan_limits?: Record<PlanTier, PlanLimitInfo>;
+  plan_tier?: PlanTier | null;
+  allowed_max_video_seconds?: number | null;
   models: PublicModelItem[];
 }
 
@@ -244,8 +246,8 @@ export async function apiGenerateCoverArt(params: {
   return res.json();
 }
 
-export async function fetchPublicModels(): Promise<PublicModelsResponse> {
-  const res = await fetch('/api/models');
+export async function fetchPublicModels(fresh = false): Promise<PublicModelsResponse> {
+  const res = await fetch(fresh ? '/api/models?fresh=1' : '/api/models');
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to fetch models (${res.status})`);

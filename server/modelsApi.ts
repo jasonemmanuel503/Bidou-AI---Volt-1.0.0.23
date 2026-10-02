@@ -52,6 +52,12 @@ import {
   invalidatePlanLimitsCache,
 } from './planLimits';
 import { AdminAuthenticatedRequest, requireAdmin } from './adminAuth';
+import { TokenBucketRateLimiter } from './rateLimit';
+
+let localCatalogVersion = 1;
+export function bumpLocalCatalogVersion(): void {
+  localCatalogVersion += 1;
+}
 
 interface ModelSupplierRow {
   id: string;
@@ -126,6 +132,7 @@ const PUBLIC_MODELS_CACHE_TTL_MS = 30 * 1000; // 30 seconds
 export function invalidateModelsCache(): void {
   publicModelsCache = null;
   clearSupplierCache();
+  bumpLocalCatalogVersion();
 }
 
 export function getInMemoryModelOverride(modelId: string) {
@@ -203,9 +210,9 @@ export async function loadAllModelsWithMetadata(): Promise<
  * Builds the sanitized public model list (active + licensing_verified only).
  * NEVER includes suppliers, supplier costs, margins, or upstream provider names.
  */
-async function getSanitizedPublicModels(): Promise<any[]> {
+async function getSanitizedPublicModels(force = false): Promise<any[]> {
   const now = Date.now();
-  if (publicModelsCache && now - publicModelsCache.fetchedAt < PUBLIC_MODELS_CACHE_TTL_MS) {
+  if (!force && publicModelsCache && now - publicModelsCache.fetchedAt < PUBLIC_MODELS_CACHE_TTL_MS) {
     return publicModelsCache.models;
   }
 
@@ -264,12 +271,48 @@ function getStartOfUtcDay(): Date {
 export function registerModelsAndAdminRoutes(app: Express): void {
   ensureInMemorySuppliersSeeded();
 
+  const catalogVersionLimiter = new TokenBucketRateLimiter(60, 60); // 60 burst / 60 per minute
+
+  app.get('/api/models/version', async (req: Request, res: Response) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const rateCheck = catalogVersionLimiter.tryConsume(ip, 1);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ error: 'RATE_LIMIT_EXCEEDED', message: 'Too many version checks', retryAfterSeconds: rateCheck.retryAfterSeconds });
+    }
+    let version = localCatalogVersion;
+    if (isLiveMode()) {
+      const admin = getSupabaseAdmin();
+      if (admin) {
+        const { data } = await admin.from('catalog_version').select('version').eq('id', 1).maybeSingle();
+        if (data?.version != null) version = Math.max(version, Number(data.version));
+      }
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ version });
+  });
+
   // ==========================================================================
   // Step 5: Public GET /api/models (cached 30 s, no supplier or cost fields)
   // ==========================================================================
   app.get('/api/models', async (req: Request, res: Response) => {
     try {
-      const models = await getSanitizedPublicModels();
+      const force = req.query.fresh === '1';
+      const models = await getSanitizedPublicModels(force);
+      const limitsMap = await getPlanLimitsMap();
+      const plan_limits: Record<string, { max_video_seconds: number; premium_monthly_cap: number; max_resolution?: string; max_concurrent_jobs?: number; max_variants?: number }> = {};
+      for (const t of PLAN_TIER_ORDER) {
+        const r = limitsMap.get(t);
+        if (r) {
+          plan_limits[t] = {
+            max_video_seconds: r.max_video_seconds,
+            premium_monthly_cap: r.premium_monthly_cap,
+            max_resolution: t === 'free' || t === 'starter' ? '720p' : '1080p',
+            max_concurrent_jobs: t === 'studio' ? 4 : 2,
+            max_variants: t === 'studio' ? 4 : 2,
+          };
+        }
+      }
+
       let allowedMaxVideoSeconds: number | null = null;
       let callerTier: PlanTier | null = null;
 
@@ -285,6 +328,8 @@ export function registerModelsAndAdminRoutes(app: Express): void {
       res.json({
         models,
         provider_env: getProviderEnv(),
+        mode: isLiveMode() ? 'live' : 'demo',
+        plan_limits,
         plan_tier: callerTier,
         allowed_max_video_seconds: allowedMaxVideoSeconds,
       });
@@ -417,17 +462,18 @@ export function registerModelsAndAdminRoutes(app: Express): void {
         updates.licence_verified_by = adminEmail;
       }
 
-      setInMemoryModelOverride(modelId, updates);
-
       if (isLiveMode()) {
         const admin = getSupabaseAdmin();
-        if (admin) {
-          const { error } = await admin.from('ai_models').update(updates).eq('id', modelId);
-          if (error) {
-            console.warn('[AdminAPI] Supabase ai_models update warning:', error.message);
-          }
+        if (!admin) {
+          return res.status(503).json({ error: 'DB_UNAVAILABLE', message: 'Database is not reachable; model was NOT changed.' });
+        }
+        const { error } = await admin.from('ai_models').update(updates).eq('id', modelId);
+        if (error) {
+          console.error('[AdminAPI] ai_models update failed:', error.message);
+          return res.status(500).json({ error: 'ADMIN_MODEL_UPDATE_FAILED', message: `Database rejected the change: ${error.message}` });
         }
       }
+      setInMemoryModelOverride(modelId, updates);   // only after the DB accepted it (or in demo mode)
 
       invalidateModelsCache();
       console.info('[Admin Audit] PATCH /api/admin/models/:id', {

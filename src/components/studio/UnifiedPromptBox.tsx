@@ -31,6 +31,7 @@ import { COVER_ART_ROUTE_KEY } from '../../services/providerCatalog';
 import { TIER_VARIANT_CAP, TIER_RANK } from '../../services/tiers';
 import { getEnhanceErrorPresentation, EnhanceErrorPresentation } from '../../lib/errorMapping';
 import type { PlanLimitInfo } from '../../services/apiClient';
+import { toast } from '../../services/toast';
 
 export interface EnhancePromptContext {
   rawPrompt: string;
@@ -446,8 +447,14 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
     }
   }, [restoreRequest, models]);
 
+  // Track previous models for unavailable toast notification
+  const prevModelsRef = useRef<AiModelConfig[] | null>(null);
+
   // Ensure tabs have valid model IDs when models list is available or updated
   useEffect(() => {
+    const prevModels = prevModelsRef.current;
+    prevModelsRef.current = models;
+
     setTabStates((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -456,11 +463,24 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         const currentModelId = next[type]?.modelId;
         const isValid = typeModels.some((m) => m.id === currentModelId);
         if (!isValid && typeModels.length > 0) {
+          const newModel = typeModels[0];
           next[type] = {
             ...next[type],
-            modelId: typeModels[0].id,
+            modelId: newModel.id,
           };
           changed = true;
+
+          // If the previous model was valid before, notify user that it became unavailable
+          if (prevModels !== null && currentModelId) {
+            const oldModel = prevModels.find(
+              (m) => m.id === currentModelId && m.generation_type === type && m.active && m.licensing_verified
+            );
+            if (oldModel && oldModel.id !== newModel.id) {
+              toast.info(
+                `"${oldModel.display_name}" is no longer available — switched to "${newModel.display_name}".`
+              );
+            }
+          }
         }
       });
       return changed ? next : prev;

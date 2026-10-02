@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
   Edit3,
+  Loader2,
+  Lock,
   RefreshCw,
   RotateCcw,
   Save,
@@ -12,6 +15,7 @@ import {
   ShieldAlert,
   Sliders,
   TrendingUp,
+  X,
 } from 'lucide-react';
 import {
   AdminModelItem,
@@ -84,19 +88,51 @@ export const SupplierProfitControlPanel: React.FC<SupplierProfitControlPanelProp
     loadData();
   }, [loadData]);
 
-  const handleToggleModelField = async (
-    model: AdminModelItem,
-    field: 'active' | 'licensing_verified',
-    nextVal: boolean
+  const [busyModelId, setBusyModelId] = useState<string | null>(null);
+  const [licenceConfirm, setLicenceConfirm] = useState<{ model: AdminModelItem; note: string } | null>(null);
+
+  const applyModelPatch = async (
+    m: AdminModelItem,
+    patch: { active?: boolean; licensing_verified?: boolean; licence_note?: string | null }
   ) => {
+    setBusyModelId(m.id);
     try {
-      await updateAdminModel(model.id, { [field]: nextVal });
-      toast.success(`Updated ${model.display_name}`);
+      await updateAdminModel(m.id, patch);
+      toast.success(
+        patch.active === false
+          ? `${m.display_name} hidden from users`
+          : `${m.display_name} is now live for users`
+      );
       await loadData();
       onModelsChanged?.();
     } catch (err: any) {
       toast.error(err?.message || 'Failed to update model');
+    } finally {
+      setBusyModelId(null);
     }
+  };
+
+  const handleVisibilitySwitch = (m: AdminModelItem, nextOn: boolean) => {
+    if (nextOn && !m.licensing_verified) {
+      setLicenceConfirm({ model: m, note: m.licence_note || '' });
+      return;
+    }
+    applyModelPatch(m, { active: nextOn });
+  };
+
+  const confirmLicenceAndActivate = async () => {
+    if (!licenceConfirm) return;
+    const note = licenceConfirm.note.trim();
+    if (!note) {
+      toast.error('Write a licence note first (who approved it, which terms, when).');
+      return;
+    }
+    await applyModelPatch(licenceConfirm.model, {
+      licensing_verified: true,
+      active: true,
+      licence_note: note,
+    });
+    setLicenceConfirm(null);
   };
 
   const handleSaveLicenceNote = async (model: AdminModelItem) => {
@@ -607,30 +643,60 @@ export const SupplierProfitControlPanel: React.FC<SupplierProfitControlPanelProp
                     </div>
                   </div>
 
-                  <div className="flex items-center flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleModelField(m, 'licensing_verified', !m.licensing_verified)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                  <div className="flex items-center flex-wrap gap-2.5">
+                    {/* Read-only Licence Chip */}
+                    <span
+                      title={
+                        m.licence_verified_by || m.licence_verified_at
+                          ? `Verified by ${m.licence_verified_by || 'admin'} on ${
+                              m.licence_verified_at ? new Date(m.licence_verified_at).toLocaleDateString() : ''
+                            }`
+                          : undefined
+                      }
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         m.licensing_verified
                           ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30'
                           : 'bg-amber-500/15 text-amber-500 border border-amber-500/30'
                       }`}
                     >
-                      {m.licensing_verified ? 'Licence Verified' : 'Unverified'}
-                    </button>
+                      {m.licensing_verified ? 'Licence verified' : 'Licence not verified'}
+                    </span>
 
-                    <button
-                      type="button"
-                      onClick={() => handleToggleModelField(m, 'active', !m.active)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
-                        m.active
-                          ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30'
-                          : 'bg-rose-500/15 text-rose-500 border border-rose-500/30'
-                      }`}
-                    >
-                      {m.active ? 'Active' : 'Disabled'}
-                    </button>
+                    {/* Visible to users Switch */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-medium text-[#6B6B75] dark:text-[#A0A0AA]">
+                        Visible to users
+                      </span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={m.active}
+                        aria-label={`Toggle user visibility for ${m.display_name}`}
+                        disabled={busyModelId === m.id}
+                        onClick={() => handleVisibilitySwitch(m, !m.active)}
+                        className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-0 cursor-pointer ${
+                          busyModelId === m.id ? 'opacity-60 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        <div
+                          className={`w-11 h-6 rounded-full transition-colors relative p-0.5 flex items-center ${
+                            m.active ? 'bg-[#2ECC71]' : 'bg-black/20 dark:bg-white/20'
+                          }`}
+                        >
+                          {busyModelId === m.id ? (
+                            <div className="w-5 h-5 flex items-center justify-center">
+                              <Loader2 size={12} className="animate-spin text-white" />
+                            </div>
+                          ) : (
+                            <div
+                              className={`w-5 h-5 rounded-full bg-white shadow-xs transition-transform ${
+                                m.active ? 'translate-x-5' : 'translate-x-0'
+                              }`}
+                            />
+                          )}
+                        </div>
+                      </button>
+                    </div>
 
                     <button
                       type="button"
@@ -736,6 +802,82 @@ export const SupplierProfitControlPanel: React.FC<SupplierProfitControlPanelProp
           })}
         </div>
       </div>
+
+      {/* Licence Verification & Activation Modal */}
+      <AnimatePresence>
+        {licenceConfirm && (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setLicenceConfirm(null)}
+              className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 50, scale: 0.95 }}
+              className="relative w-full max-h-[85vh] sm:max-h-none sm:max-w-md bg-white dark:bg-[#18181B] rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-black/10 dark:border-white/10 z-10 overflow-y-auto flex flex-col gap-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500">
+                    <Lock size={16} />
+                  </div>
+                  <h3 className="jost text-base font-bold text-[#1A1A1E] dark:text-[#F5F5F7]">
+                    Turn on {licenceConfirm.model.display_name}?
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLicenceConfirm(null)}
+                  className="p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-[#6B6B75] cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <p className="text-xs text-[#6B6B75] dark:text-[#A0A0AA] leading-relaxed">
+                This model has not been licence-verified. By continuing you confirm that its
+                commercial licence/terms have been reviewed and that using it in a paid product is allowed.
+              </p>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-[#1A1A1E] dark:text-[#F5F5F7]">
+                  Licence note <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={licenceConfirm.note}
+                  onChange={(e) =>
+                    setLicenceConfirm((prev) => (prev ? { ...prev, note: e.target.value } : null))
+                  }
+                  placeholder="Who approved it, which terms, when (e.g. Approved by Grace, Cloudflare Workers AI Terms of Service, 2026-10-02)"
+                  className="w-full px-3 py-2 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs font-mono resize-none focus:outline-hidden focus:ring-1 focus:ring-[#FF8800]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setLicenceConfirm(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold glass-panel text-[#6B6B75] dark:text-[#A0A0AA] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmLicenceAndActivate}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-brand-gradient shadow-xs cursor-pointer"
+                >
+                  Verify &amp; turn on
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

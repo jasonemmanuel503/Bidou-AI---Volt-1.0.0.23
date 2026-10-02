@@ -6,6 +6,7 @@
  */
 
 import { AiModelConfig, GenerationJob, GenerationType } from '../types';
+import { INITIAL_AI_MODELS } from './configData';
 
 export interface GenerateImageParams {
   userId: string;
@@ -161,3 +162,5 @@ export class ModelRouter {
     };
   }
 }
+
+export const modelRouter = new ModelRouter(INITIAL_AI_MODELS);
