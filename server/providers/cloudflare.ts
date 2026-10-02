@@ -25,6 +25,7 @@ import {
    redactSecrets,
   registerSupplierCapability,
   reserveSupplierBudget,
+  withSupplierBudgetMutex,
 } from './suppliers';
 import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
 
@@ -340,31 +341,33 @@ export async function executeCloudflareImageGeneration(
   }
 
   // Check budget for each variant sequentially so daily cap accounting is exact,
-  // then dispatch approved calls in parallel via Promise.allSettled.
+  // protected by in-process async mutex (single server instance only) to serialize check + recordAttempt.
   const variantPlans: Array<'call' | 'simulate_cap' | 'tripped'> = [];
   for (let i = 0; i < n; i++) {
-    const budget = await reserveSupplierBudget('cloudflare', estCostUsd, 1, 'image');
-    if (budget === 'cap_reached') {
-      variantPlans.push('simulate_cap');
-    } else if (budget === 'tripped') {
-      variantPlans.push('tripped');
-    } else {
-      variantPlans.push('call');
-      // Record attempt immediately so concurrent/subsequent checks in the same batch see it
-      await recordAttempt({
-        jobId,
-        variantIndex: i,
-        userId,
-        modelId: model.id,
-        supplier: 'cloudflare',
-        upstreamModel,
-        env,
-        units: 1,
-        unitLabel: 'image',
-        estCostUsd,
-        creditsCharged: unitCost,
-      });
-    }
+    await withSupplierBudgetMutex('cloudflare', async () => {
+      const budget = await reserveSupplierBudget('cloudflare', estCostUsd, 1, 'image');
+      if (budget === 'cap_reached') {
+        variantPlans.push('simulate_cap');
+      } else if (budget === 'tripped') {
+        variantPlans.push('tripped');
+      } else {
+        variantPlans.push('call');
+        // Record attempt immediately so concurrent/subsequent checks in the same batch see it
+        await recordAttempt({
+          jobId,
+          variantIndex: i,
+          userId,
+          modelId: model.id,
+          supplier: 'cloudflare',
+          upstreamModel,
+          env,
+          units: 1,
+          unitLabel: 'image',
+          estCostUsd,
+          creditsCharged: unitCost,
+        });
+      }
+    });
   }
 
   const tasks = variantPlans.map(async (plan, idx): Promise<VariantDispatchResult> => {

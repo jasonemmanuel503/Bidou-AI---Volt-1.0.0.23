@@ -34,6 +34,7 @@ import {
   redactSecrets,
   resolveSuppliers,
   reserveSupplierBudget,
+  withSupplierBudgetMutex,
   SupplierPlan,
 } from './suppliers';
 import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
@@ -239,38 +240,54 @@ export async function startVeoVariants(
         continue;
       }
 
-      const budget = await reserveSupplierBudget(plan.supplier, plan.estCostUsd, units, 'video');
-      if (budget === 'cap_reached') {
-        // Dev hard cap reached -> return simulated video job (never fails in dev)
-        return {
-          providerJobId: `sim_veo_${crypto.randomUUID()}_${idx}`,
-          status: 'processing',
+      let budgetResult: string = 'ok';
+      let simulatedCapResult: VariantDispatchResult | null = null;
+
+      // In-process per-supplier async mutex (single server instance only) covers check + recordAttempt
+      await withSupplierBudgetMutex(plan.supplier, async () => {
+        const budget = await reserveSupplierBudget(plan.supplier, plan.estCostUsd, units, 'video');
+        budgetResult = budget;
+        if (budget === 'cap_reached') {
+          // Dev hard cap reached -> return simulated video job (never fails in dev)
+          simulatedCapResult = {
+            providerJobId: `sim_veo_${crypto.randomUUID()}_${idx}`,
+            status: 'processing',
+            supplier: plan.supplier,
+            upstreamModel: plan.upstreamModel,
+            estCostUsd: 0,
+            actualCostUsd: 0,
+            simulated: true,
+          };
+          return;
+        }
+
+        if (budget === 'tripped') {
+          return;
+        }
+
+        await recordAttempt({
+          jobId,
+          variantIndex: idx,
+          userId,
+          modelId: model.id,
           supplier: plan.supplier,
           upstreamModel: plan.upstreamModel,
-          estCostUsd: 0,
-          actualCostUsd: 0,
-          simulated: true,
-        };
+          env,
+          units,
+          unitLabel,
+          estCostUsd: plan.estCostUsd,
+          creditsCharged: unitCost,
+        });
+      });
+
+      if (simulatedCapResult) {
+        return simulatedCapResult;
       }
 
-      if (budget === 'tripped') {
+      if (budgetResult === 'tripped') {
         sawTrippedOrUnavailable = true;
         continue;
       }
-
-      await recordAttempt({
-        jobId,
-        variantIndex: idx,
-        userId,
-        modelId: model.id,
-        supplier: plan.supplier,
-        upstreamModel: plan.upstreamModel,
-        env,
-        units,
-        unitLabel,
-        estCostUsd: plan.estCostUsd,
-        creditsCharged: unitCost,
-      });
 
       // Dispatch ONCE to this supplier (NEVER auto-retry the same POST)
       try {

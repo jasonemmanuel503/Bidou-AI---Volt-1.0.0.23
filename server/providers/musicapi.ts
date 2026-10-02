@@ -19,6 +19,7 @@ import {
   resolveSuppliers,
   hasSupplierCredentials,
   reserveSupplierBudget,
+  withSupplierBudgetMutex,
   getProviderEnv,
 } from './suppliers';
 import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
@@ -109,48 +110,58 @@ export async function startMusicTask(
     }));
   }
 
-  // 3. Dev cap & daily spend circuit breaker check
+  // 3. Dev cap & daily spend circuit breaker check, protected by in-process async mutex
   const estCostUsd =
     getActualCostUsd(modelId, 'musicapi') ||
     (modelId === 'mus_lyria_3_pro' ? 0.11 : 0.12);
 
-  const budget = await reserveSupplierBudget('musicapi', estCostUsd, 1, 'music');
-  if (budget === 'tripped') {
-    return Array.from({ length: n }).map(() => ({
-      status: 'failed' as const,
-      errorMessage: 'MODEL_TEMPORARILY_UNAVAILABLE',
-      supplier: 'musicapi' as const,
-      upstreamModel: targetMv,
-    }));
-  }
+  let earlyMusicResult: VariantDispatchResult[] | null = null;
 
-  if (budget === 'cap_reached') {
-    const simBatchId = crypto.randomUUID();
-    return Array.from({ length: n }).map((_, idx) => ({
-      providerJobId: `sim_music_${simBatchId}:${idx}`,
-      status: 'processing' as const,
-      supplier: 'musicapi' as const,
-      upstreamModel: targetMv,
-      estCostUsd: 0,
-      actualCostUsd: 0,
-      simulated: true,
-    }));
-  }
+  await withSupplierBudgetMutex('musicapi', async () => {
+    const budget = await reserveSupplierBudget('musicapi', estCostUsd, 1, 'music');
+    if (budget === 'tripped') {
+      earlyMusicResult = Array.from({ length: n }).map(() => ({
+        status: 'failed' as const,
+        errorMessage: 'MODEL_TEMPORARILY_UNAVAILABLE',
+        supplier: 'musicapi' as const,
+        upstreamModel: targetMv,
+      }));
+      return;
+    }
 
-  // 4. Record 1 task attempt in provider_cost_ledger (variant_index = 0)
-  await recordAttempt({
-    jobId,
-    variantIndex: 0,
-    userId,
-    modelId: modelId || 'mus_lyria_3_pro',
-    supplier: 'musicapi',
-    upstreamModel: targetMv,
-    env: getProviderEnv(),
-    units: 1,
-    unitLabel: 'task',
-    estCostUsd,
-    creditsCharged: (unitCost || 0) * n,
+    if (budget === 'cap_reached') {
+      const simBatchId = crypto.randomUUID();
+      earlyMusicResult = Array.from({ length: n }).map((_, idx) => ({
+        providerJobId: `sim_music_${simBatchId}:${idx}`,
+        status: 'processing' as const,
+        supplier: 'musicapi' as const,
+        upstreamModel: targetMv,
+        estCostUsd: 0,
+        actualCostUsd: 0,
+        simulated: true,
+      }));
+      return;
+    }
+
+    // 4. Record 1 task attempt in provider_cost_ledger (variant_index = 0)
+    await recordAttempt({
+      jobId,
+      variantIndex: 0,
+      userId,
+      modelId: modelId || 'mus_lyria_3_pro',
+      supplier: 'musicapi',
+      upstreamModel: targetMv,
+      env: getProviderEnv(),
+      units: 1,
+      unitLabel: 'task',
+      estCostUsd,
+      creditsCharged: (unitCost || 0) * n,
+    });
   });
+
+  if (earlyMusicResult) {
+    return earlyMusicResult;
+  }
 
   // 5. Build MusicAPI request body
   const stylePrompt = (enhancedPrompt || prompt || '').trim();

@@ -16,11 +16,13 @@
  *    `licensing_verified` is `true` after the update, and automatically stamps
  *    `licence_verified_at` and `licence_verified_by` when `licensing_verified`
  *    is turned on.
+ * 4. Supplier spend limits: only a limit > 0 is enforced; null or 0 means
+ *    "no daily limit". To disable/stop a supplier entirely, use enabled=false.
  */
 
 import type { Express, Request, Response } from 'express';
 import { INITIAL_AI_MODELS } from '../src/services/configData';
-import { quoteGenerationCost, getModelPriceTable } from '../src/services/pricingEngine';
+import { quoteGenerationCost, getModelPriceTable, DEFAULT_PRICING_FACTORS } from '../src/services/pricingEngine';
 import type { AiModelConfig, PlanTier, SupplierId } from '../src/types';
 import {
   getSupabaseAdmin,
@@ -40,6 +42,7 @@ import {
   countUnitsSince,
   getInMemoryLedger,
   spendUsd,
+  getFxXafPerUsd,
 } from './costLedger';
 import {
   PLAN_TIER_ORDER,
@@ -549,7 +552,7 @@ export function registerModelsAndAdminRoutes(app: Express): void {
       ) {
         return res.status(400).json({
           error: 'INVALID_BODY',
-          message: 'daily_spend_limit_usd must be a non-negative number or null',
+          message: 'daily_spend_limit_usd must be a non-negative number or null (0 or null means no daily limit; use enabled=false to stop a supplier)',
         });
       }
       if (clear_trip !== undefined && typeof clear_trip !== 'boolean') {
@@ -786,6 +789,8 @@ export function registerModelsAndAdminRoutes(app: Express): void {
       res.json({
         days,
         provider_env: getProviderEnv(),
+        fx_xaf_per_usd: getFxXafPerUsd(),
+        usd_to_xaf_rate: DEFAULT_PRICING_FACTORS.usd_to_xaf_rate,
         totals: {
           succeeded_count: totalSucceeded,
           revenue_floor_xaf: Number(totalRevenueFloorXaf.toFixed(2)),

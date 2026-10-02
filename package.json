@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "pricing:audit": "tsx scripts/pricing-audit.ts"
+    "pricing:audit": "tsx scripts/pricing-audit.ts",
+    "phase6:verify": "tsx scripts/phase6-verify.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6",

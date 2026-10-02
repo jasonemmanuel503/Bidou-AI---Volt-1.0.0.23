@@ -38,6 +38,7 @@ import {
   redactSecrets,
   registerSupplierCapability,
   reserveSupplierBudget,
+  withSupplierBudgetMutex,
   SUBMIT_TIMEOUT_MS,
   tripSupplierCircuit,
 } from './suppliers';
@@ -455,44 +456,55 @@ export async function startSunorMusicTask(
   }
 
   const estCostUsd = getActualCostUsd(model?.id || 'mus_suno_v6', 'sunor') || 0.10;
-  const budget = await reserveSupplierBudget('sunor', estCostUsd, 1, 'music');
 
-  if (budget === 'cap_reached') {
-    const simBatchId = crypto.randomUUID();
-    return Array.from({ length: n }).map((_, idx) => ({
-      providerJobId: `sunor_sim_${simBatchId}:${idx}`,
-      status: 'processing' as const,
+  let earlySunorResult: VariantDispatchResult[] | null = null;
+
+  await withSupplierBudgetMutex('sunor', async () => {
+    const budget = await reserveSupplierBudget('sunor', estCostUsd, 1, 'music');
+
+    if (budget === 'cap_reached') {
+      const simBatchId = crypto.randomUUID();
+      earlySunorResult = Array.from({ length: n }).map((_, idx) => ({
+        providerJobId: `sunor_sim_${simBatchId}:${idx}`,
+        status: 'processing' as const,
+        supplier: 'sunor',
+        upstreamModel: 'suno',
+        estCostUsd: 0,
+        actualCostUsd: 0,
+        simulated: true,
+      }));
+      return;
+    }
+
+    if (budget === 'tripped') {
+      earlySunorResult = Array.from({ length: n }).map(() => ({
+        status: 'failed' as const,
+        errorMessage: 'MODEL_TEMPORARILY_UNAVAILABLE',
+        supplier: 'sunor',
+        upstreamModel: 'suno',
+      }));
+      return;
+    }
+
+    // Record 1 song task attempt in provider_cost_ledger (variant_index = 0 represents the 2-take task)
+    await recordAttempt({
+      jobId,
+      variantIndex: 0,
+      userId,
+      modelId: model?.id || 'mus_suno_v6',
       supplier: 'sunor',
       upstreamModel: 'suno',
-      estCostUsd: 0,
-      actualCostUsd: 0,
-      simulated: true,
-    }));
-  }
-
-  if (budget === 'tripped') {
-    return Array.from({ length: n }).map(() => ({
-      status: 'failed' as const,
-      errorMessage: 'MODEL_TEMPORARILY_UNAVAILABLE',
-      supplier: 'sunor',
-      upstreamModel: 'suno',
-    }));
-  }
-
-  // Record 1 song task attempt in provider_cost_ledger (variant_index = 0 represents the 2-take task)
-  await recordAttempt({
-    jobId,
-    variantIndex: 0,
-    userId,
-    modelId: model?.id || 'mus_suno_v6',
-    supplier: 'sunor',
-    upstreamModel: 'suno',
-    env,
-    units: 1,
-    unitLabel: 'song',
-    estCostUsd,
-    creditsCharged: (unitCost || 0) * n,
+      env,
+      units: 1,
+      unitLabel: 'song',
+      estCostUsd,
+      creditsCharged: (unitCost || 0) * n,
+    });
   });
+
+  if (earlySunorResult) {
+    return earlySunorResult;
+  }
 
   try {
     const { taskId, creditsCharged } = await submitSunorTask({

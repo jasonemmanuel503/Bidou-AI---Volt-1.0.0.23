@@ -20,12 +20,15 @@
  *    - Google video in dev: simulated unless DEV_ALLOW_GOOGLE_VIDEO=true
  * 4. Prod circuit breaker: compares today's UTC spend + estimate against
  *    supplier_status.daily_spend_limit_usd and trips the supplier until end of UTC day.
+ *    Daily spend limit rule: only a limit > 0 is enforced; null or 0 means
+ *    "no daily limit". To disable/stop a supplier entirely, use enabled=false.
+ *    In dev mode, trips are kept in memory only and never persisted to DB.
  */
 
 import { getSupabaseAdmin } from '../db';
 import { isLiveMode } from '../config/mode';
 import { INITIAL_AI_MODELS } from '../../src/services/configData';
-import { getActualCostUsd } from '../../src/services/providerCatalog';
+import { getActualCostUsd, IMAGE_ROUTES } from '../../src/services/providerCatalog';
 import { spendUsd, countUnitsSince } from '../costLedger';
 import type { SupplierId, SupplierRoute } from '../../src/types';
 
@@ -275,6 +278,55 @@ export function clearSupplierCache(): void {
   supplierCache = null;
 }
 
+/**
+ * In-process per-supplier async mutex.
+ * Note: This protects a single server instance only (the server architecture assumes a single active instance).
+ * Serializes budget checks and initial ledger attempt recordings so parallel requests
+ * cannot race and overshoot daily limits or dev caps.
+ */
+const supplierMutexes = new Map<string, Promise<void>>();
+
+export async function withSupplierBudgetMutex<T>(supplier: string, fn: () => Promise<T>): Promise<T> {
+  const current = supplierMutexes.get(supplier) || Promise.resolve();
+  let release: () => void = () => {};
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  supplierMutexes.set(supplier, current.then(() => next, () => next));
+
+  await current;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (supplierMutexes.get(supplier) === next) {
+      supplierMutexes.delete(supplier);
+    }
+  }
+}
+
+/**
+ * Fix 7: Logs one warning at startup if any Google image model row's upstream_model
+ * differs from IMAGE_ROUTES in src/services/providerCatalog.ts.
+ */
+export function verifyImageModelUpstreamRoutes(): void {
+  const imageRouteMap: Record<string, string> = {
+    img_nano_banana_2_lite: IMAGE_ROUTES.nano_banana_2_lite.googleModelId,
+    img_nano_banana_2: IMAGE_ROUTES.nano_banana_2.googleModelId,
+    img_nano_banana_pro: IMAGE_ROUTES.nano_banana_pro.googleModelId,
+  };
+
+  for (const [modelId, expectedModel] of Object.entries(imageRouteMap)) {
+    const model = INITIAL_AI_MODELS.find((m) => m.id === modelId);
+    const googleSup = model?.suppliers?.find((s) => s.supplier === 'google');
+    if (googleSup && googleSup.upstream_model !== expectedModel) {
+      console.warn(
+        `⚠️  [Startup Warning] Image model "${modelId}" supplier "google" has upstream_model="${googleSup.upstream_model}", differing from IMAGE_ROUTES ("${expectedModel}"). Code calls IMAGE_ROUTES directly.`
+      );
+    }
+  }
+}
+
 async function loadSupplierRoutingData(): Promise<CachedSupplierData> {
   const now = Date.now();
   if (supplierCache && now - supplierCache.fetchedAt < CACHE_TTL_MS) {
@@ -320,6 +372,20 @@ async function loadSupplierRoutingData(): Promise<CachedSupplierData> {
         ]);
 
         if (!rErr && Array.isArray(dbRoutes) && dbRoutes.length > 0) {
+          const imageRouteMap: Record<string, string> = {
+            img_nano_banana_2_lite: IMAGE_ROUTES.nano_banana_2_lite.googleModelId,
+            img_nano_banana_2: IMAGE_ROUTES.nano_banana_2.googleModelId,
+            img_nano_banana_pro: IMAGE_ROUTES.nano_banana_pro.googleModelId,
+          };
+          for (const row of dbRoutes) {
+            if (row.supplier === 'google' && row.model_id in imageRouteMap) {
+              if (row.upstream_model !== imageRouteMap[row.model_id]) {
+                console.warn(
+                  `⚠️  [Startup Warning] DB model_suppliers row for "${row.model_id}" has upstream_model="${row.upstream_model}" differing from code IMAGE_ROUTES ("${imageRouteMap[row.model_id]}"). Code calls IMAGE_ROUTES directly.`
+                );
+              }
+            }
+          }
           const grouped = new Map<string, SupplierRoute[]>();
           for (const row of dbRoutes) {
             const list = grouped.get(row.model_id) || [];
@@ -432,8 +498,8 @@ export async function resolveSuppliers(
     });
 
     const dailyLimit = status?.dailySpendLimitUsd ?? DEFAULT_DAILY_LIMITS[route.supplier] ?? null;
-    if (dailyLimit !== null && Number.isFinite(dailyLimit) && dailyLimit >= 0) {
-      const spentToday = await spendUsd({ supplier: route.supplier, since: startOfToday });
+    if (dailyLimit !== null && Number.isFinite(dailyLimit) && dailyLimit > 0) {
+      const spentToday = await spendUsd({ supplier: route.supplier, env, since: startOfToday });
       if (spentToday + estCostUsd > dailyLimit + 1e-6) {
         const reason = `Daily spend limit exceeded ($${spentToday.toFixed(2)} + $${estCostUsd.toFixed(2)} > $${dailyLimit.toFixed(2)})`;
         await tripSupplierCircuit(route.supplier, reason);
@@ -483,7 +549,8 @@ export async function tripSupplierCircuit(supplier: SupplierId, reason: string):
   }
   console.error(`🚨 [Suppliers] Circuit breaker tripped for supplier="${supplier}" until ${until}: ${reason}`);
 
-  if (isLiveMode()) {
+  // In dev mode, do NOT persist trip to DB (memory only) so dev testing never blocks prod
+  if (getProviderEnv() !== 'dev' && isLiveMode()) {
     const admin = getSupabaseAdmin();
     if (admin) {
       try {

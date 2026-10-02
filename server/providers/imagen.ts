@@ -21,7 +21,7 @@ import { isLiveMode } from '../config/mode';
 import { IMAGE_ROUTES, getActualCostUsd } from '../../src/services/providerCatalog';
 import { resolveGoogleModelId } from './routing';
 import { executeCloudflareImageGeneration } from './cloudflare';
-import { getProviderEnv, reserveSupplierBudget } from './suppliers';
+import { getProviderEnv, reserveSupplierBudget, withSupplierBudgetMutex } from './suppliers';
 import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,30 +96,32 @@ export async function executeImageGeneration(
     const [simW, simH] = aspectRatio === '16:9' ? [1280, 720] : aspectRatio === '9:16' ? [720, 1280] : [1024, 1024];
 
     try {
-      // Check supplier budget per variant before calling Google
+      // Check supplier budget per variant before calling Google, protected by per-supplier async mutex (single server instance only)
       const variantPlans: Array<'call' | 'simulate_cap' | 'tripped'> = [];
       for (let i = 0; i < n; i++) {
-        const budget = await reserveSupplierBudget('google', estCostUsd, 1, 'image');
-        if (budget === 'cap_reached') {
-          variantPlans.push('simulate_cap');
-        } else if (budget === 'tripped') {
-          variantPlans.push('tripped');
-        } else {
-          variantPlans.push('call');
-          await recordAttempt({
-            jobId,
-            variantIndex: i,
-            userId,
-            modelId: ctx.model.id,
-            supplier: 'google',
-            upstreamModel: googleModel,
-            env,
-            units: 1,
-            unitLabel: 'image',
-            estCostUsd,
-            creditsCharged: ctx.unitCost,
-          });
-        }
+        await withSupplierBudgetMutex('google', async () => {
+          const budget = await reserveSupplierBudget('google', estCostUsd, 1, 'image');
+          if (budget === 'cap_reached') {
+            variantPlans.push('simulate_cap');
+          } else if (budget === 'tripped') {
+            variantPlans.push('tripped');
+          } else {
+            variantPlans.push('call');
+            await recordAttempt({
+              jobId,
+              variantIndex: i,
+              userId,
+              modelId: ctx.model.id,
+              supplier: 'google',
+              upstreamModel: googleModel,
+              env,
+              units: 1,
+              unitLabel: 'image',
+              estCostUsd,
+              creditsCharged: ctx.unitCost,
+            });
+          }
+        });
       }
 
       if (variantPlans.every((p) => p === 'tripped')) {

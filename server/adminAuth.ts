@@ -14,9 +14,10 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { resolveUserFromAuthHeader, ResolvedUser } from './db';
-import { getProviderEnv, hasSupplierCredentials } from './providers/suppliers';
+import { getProviderEnv, hasSupplierCredentials, verifyImageModelUpstreamRoutes } from './providers/suppliers';
 import { getFxXafPerUsd } from './costLedger';
 import { isLiveMode } from './config/mode';
+import { DEFAULT_PRICING_FACTORS } from '../src/services/pricingEngine';
 import type { SupplierId } from '../src/types';
 
 export interface AdminAuthenticatedRequest extends Request {
@@ -122,4 +123,19 @@ export function logStartupValidationTable(): void {
       '⚠️  [Bidou Startup WARNING] PROVIDER_ENV=prod is active but FX_XAF_PER_USD is not set in environment. Using catalog constant (571.23 XAF/USD) — please confirm this rate in production!'
     );
   }
+
+  // Fix 10: Loud warning if FX_XAF_PER_USD differs from catalog constant (571.23) by >3%
+  const envFx = Number(process.env.FX_XAF_PER_USD);
+  if (Number.isFinite(envFx) && envFx > 0) {
+    const catalogRate = DEFAULT_PRICING_FACTORS.usd_to_xaf_rate;
+    const diffPct = Math.abs(envFx - catalogRate) / catalogRate;
+    if (diffPct > 0.03) {
+      console.warn(
+        `\n⚠️  [EXCHANGE RATE WARNING] FX_XAF_PER_USD (${envFx}) differs from catalog constant (${catalogRate}) by ${(diffPct * 100).toFixed(1)}% (> 3%)! Customer prices still use the constant; update usd_to_xaf_rate and re-run npm run pricing:audit.\n`
+      );
+    }
+  }
+
+  // Fix 7: Verify image model upstream routes match IMAGE_ROUTES
+  verifyImageModelUpstreamRoutes();
 }

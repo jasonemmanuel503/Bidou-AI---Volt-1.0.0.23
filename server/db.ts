@@ -416,6 +416,16 @@ export async function reserveCreditsForJob(params: {
       throw new Error(error.message || 'Credit reservation database error');
     }
 
+    const reservationId = data as string;
+    const { data: resRow } = await admin
+      .from('credit_reservations')
+      .select('promo_amount, amount')
+      .eq('id', reservationId)
+      .maybeSingle();
+
+    const promoUsed = Number((resRow as any)?.promo_amount ?? 0);
+    const paidUsed = Math.max(0, amount - promoUsed);
+
     const { data: wallet } = await admin
       .from('credit_wallets')
       .select('*')
@@ -426,12 +436,12 @@ export async function reserveCreditsForJob(params: {
     const promoBalance = Number((wallet as any)?.promo_balance ?? 0);
 
     return {
-      reservationId: data as string,
+      reservationId,
       availableBalance: paidBalance + promoBalance,
       paidBalance,
       promoBalance,
-      promoUsed: 0,
-      paidUsed: amount,
+      promoUsed,
+      paidUsed,
     };
   }
 
