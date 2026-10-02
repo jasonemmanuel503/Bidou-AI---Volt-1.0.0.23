@@ -1,0 +1,8 @@
+{
+  "name": "Bidou AI",
+  "description": "Credit-based multi-provider AI creative studio for image, video, and music with local African mobile money payments.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

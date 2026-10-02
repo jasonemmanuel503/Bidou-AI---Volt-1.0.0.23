@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048" width="2048" height="2048">
+  
+    <defs>
+      <linearGradient id="bidouLinearGradient" x1="15%" y1="90%" x2="90%" y2="15%">
+        <stop offset="0%" stop-color="#FF3B00" />
+        <stop offset="30%" stop-color="#FF5A00" />
+        <stop offset="65%" stop-color="#FF7B00" />
+        <stop offset="88%" stop-color="#FFA400" />
+        <stop offset="100%" stop-color="#FFB800" />
+      </linearGradient>
+    </defs>
+  
+  <g fill="url(#bidouLinearGradient)" stroke="url(#bidouLinearGradient)">
+    <!-- 1. Left Vertical Stem & Bottom Bowl of 'b' -->
+    <path fill="url(#bidouLinearGradient)" stroke="none" d="
+      M 670 470
+      C 565 470, 488 548, 488 655
+      L 488 1240
+      C 488 1450, 645 1565, 860 1565
+      C 1005 1565, 1145 1500, 1245 1380
+      C 1135 1425, 1000 1435, 865 1405
+      C 705 1365, 680 1235, 680 1105
+      L 680 655
+      C 680 610, 695 580, 725 555
+      C 755 528, 785 515, 785 490
+      C 785 478, 765 470, 735 470
+      Z
+    " />
+
+    <!-- 2. Upper Sweeping Arc (separated from stem by clean diagonal slice) -->
+    <path fill="url(#bidouLinearGradient)" stroke="none" d="
+      M 920 775
+      C 890 795, 880 825, 905 845
+      C 930 865, 960 860, 985 835
+      C 1080 735, 1225 695, 1370 735
+      C 1545 785, 1665 930, 1685 1115
+      C 1695 1205, 1655 1300, 1595 1370
+      C 1570 1395, 1575 1425, 1605 1445
+      C 1635 1465, 1670 1460, 1695 1430
+      C 1780 1330, 1825 1200, 1815 1065
+      C 1795 815, 1625 610, 1380 555
+      C 1175 510, 960 580, 830 720
+      L 920 775
+      Z
+    " />
+
+    <!-- 3. Hollow Play Triangle (Outlined) in counter -->
+    <polygon 
+      points="780,890 780,1180 1040,1035" 
+      fill="none" 
+      stroke="url(#bidouLinearGradient)" 
+      stroke-width="118" 
+      stroke-linejoin="round" 
+      stroke-linecap="round" 
+    />
+
+    <!-- 4. Three Waveform/Equalizer Lines flowing from bottom-right bowl -->
+    <g fill="none" stroke="url(#bidouLinearGradient)" stroke-width="98" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Wave 1 (Top) -->
+      <path d="
+        M 960 1430
+        C 1070 1330, 1185 1075, 1350 1125
+        C 1465 1160, 1495 1300, 1655 1300
+        C 1700 1300, 1720 1300, 1740 1300
+      " />
+
+      <!-- Wave 2 (Middle) -->
+      <path d="
+        M 940 1510
+        C 1070 1430, 1195 1210, 1360 1260
+        C 1475 1300, 1505 1430, 1665 1430
+        C 1700 1430, 1720 1430, 1740 1430
+      " />
+
+      <!-- Wave 3 (Bottom) -->
+      <path d="
+        M 920 1590
+        C 1060 1530, 1195 1350, 1360 1390
+        C 1475 1430, 1505 1560, 1665 1560
+        C 1700 1560, 1720 1560, 1740 1560
+      " />
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,373 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Bidou AI Global Design Tokens */
+@layer base {
+  :root {
+    --brand-primary: #F86A00;
+    --brand-secondary: #FF8800;
+    --brand-amber: #FFB020;
+    --bg-light: #FFFFFF;
+    --text-primary-light: #1A1A1E;
+    --text-secondary-light: #6B6B75;
+  }
+
+  .dark {
+    --bg-dark: #121214;
+    --text-primary-dark: #F5F5F7;
+    --text-secondary-dark: #A0A0AA;
+  }
+
+  body,
+  .glass-panel,
+  .glass-panel-subtle,
+  .overlay-panel,
+  header,
+  aside,
+  nav,
+  main,
+  button,
+  input,
+  textarea {
+    transition: background-color 250ms ease, border-color 250ms ease, color 250ms ease;
+  }
+}
+
+.inter {
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-optical-sizing: auto;
+}
+
+.jost {
+  font-family: "Jost", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-optical-sizing: auto;
+}
+
+/* Glassmorphism Classes (Tuned for high GPU performance) */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(229, 231, 235, 0.8);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
+}
+
+.dark .glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 136, 0, 0.18);
+  box-shadow: 0 12px 36px -10px rgba(0, 0, 0, 0.35);
+}
+
+.dark #trust-section .built-for-africa-card {
+  box-shadow: none !important;
+  border: none !important;
+  border-width: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.glass-panel-subtle {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(240, 240, 243, 0.7);
+}
+
+.dark .glass-panel-subtle {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 136, 0, 0.1);
+}
+
+/* Overlay surfaces: dropdowns, popovers, modals, tooltips, slide-in panels.
+   Deliberately much more opaque than .glass-panel — these float over
+   arbitrary, busy content and must stay legible regardless of what's
+   behind them. Lower blur value too (8px). */
+.overlay-panel {
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(229, 231, 235, 0.9);
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.18), 0 4px 12px -2px rgba(0, 0, 0, 0.08);
+}
+
+.dark .overlay-panel {
+  background: rgba(24, 24, 27, 0.97);   /* near-opaque dark surface, not 5% white */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 136, 0, 0.22);
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+}
+
+/* Animated gradient border (strictly border-only masking, zero background fill) */
+@keyframes bidou-border-flow {
+  0%   { background-position:   0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position:   0% 50%; }
+}
+
+.bidou-gradient-border {
+  --gb-thickness: 1.5px;
+  --gb-radius: 24px;
+  --gb-speed: 4s;
+  --gb-opacity: 0;              /* hidden by default */
+  position: relative;
+  border-radius: var(--gb-radius);
+  padding: var(--gb-thickness);
+  background: transparent;
+  transition: box-shadow .3s ease;
+}
+
+/* The animated gradient is STRICTLY confined to the outer border ring via mask composite.
+   The interior content-box is completely excluded/hollow - zero gradient background. */
+.bidou-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--gb-radius);
+  padding: var(--gb-thickness);
+  background-image: linear-gradient(
+    90deg,
+    var(--brand-primary), var(--brand-secondary),
+    var(--brand-amber),   var(--brand-secondary),
+    var(--brand-primary)
+  );
+  background-size: 300% 300%;
+  animation: bidou-border-flow var(--gb-speed) ease infinite;
+  -webkit-mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: var(--gb-opacity);
+  transition: opacity .35s ease;
+  z-index: 2;
+}
+
+/* Subtle idle border outline when not lit - strictly border line, no background fill */
+.bidou-gradient-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--gb-radius);
+  border: var(--gb-thickness) solid var(--gb-idle, rgba(255, 136, 0, 0.2));
+  pointer-events: none;
+  opacity: calc(1 - var(--gb-opacity));
+  transition: opacity .35s ease;
+  z-index: 1;
+}
+
+.bidou-gradient-border > * {
+  position: relative;
+  z-index: 3;
+  border-radius: calc(var(--gb-radius) - var(--gb-thickness));
+  height: 100%;
+}
+
+.bidou-gradient-border[data-mode="always"]        { --gb-opacity: 1; }
+.bidou-gradient-border[data-mode="hover"]:hover,
+.bidou-gradient-border[data-mode="hover"]:focus-within,
+.bidou-gradient-border[data-mode="focus"]:focus-within { --gb-opacity: 1; }
+
+/* Glow effect when lit */
+.bidou-gradient-border[data-glow="true"][data-mode="always"],
+.bidou-gradient-border[data-glow="true"][data-mode="hover"]:hover,
+.bidou-gradient-border[data-glow="true"][data-mode="hover"]:focus-within,
+.bidou-gradient-border[data-glow="true"][data-mode="focus"]:focus-within {
+  box-shadow: 0 20px 25px -5px rgba(248, 106, 0, 0.15), 0 8px 10px -6px rgba(248, 106, 0, 0.15);
+}
+
+/* Touch devices have no hover: show it permanently instead of never. */
+@media (hover: none) {
+  .bidou-gradient-border[data-mode="hover"] { --gb-opacity: 1; }
+  .bidou-gradient-border[data-glow="true"][data-mode="hover"] {
+    box-shadow: 0 20px 25px -5px rgba(248, 106, 0, 0.15), 0 8px 10px -6px rgba(248, 106, 0, 0.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bidou-gradient-border { animation: none; }
+}
+
+/* Brand gradient text and backgrounds */
+.bg-brand-gradient {
+  background: linear-gradient(135deg, #F86A00 0%, #FF8800 50%, #FFB020 100%);
+}
+
+.text-brand-gradient {
+  background: linear-gradient(135deg, #F86A00 0%, #FF8800 50%, #FFB020 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Branded scrollbar — GLOBAL again. Every scroller in the app (including portalled overlays and any
+   accidental overflow) must show the orange scrollbar, never the gray OS one. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--brand-primary) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--brand-secondary) 0%, var(--brand-amber) 100%);
+}
+
+/* Prompt textarea: hidden on mobile (<sm), preserved on desktop (sm+) */
+.prompt-box-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.prompt-box-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@media (min-width: 640px) {
+  .prompt-box-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--brand-primary) transparent;
+  }
+  .prompt-box-scrollbar::-webkit-scrollbar {
+    display: block;
+    width: 8px;
+    height: 8px;
+  }
+  .prompt-box-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .prompt-box-scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
+    border-radius: 999px;
+  }
+}
+
+/* Scrollbar hiding utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar { display: none; width: 0; height: 0; }
+}
+
+/* Fade-in animation */
+@keyframes bidou-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: bidou-fade-in 0.25s ease-out forwards;
+}
+
+/* Slide-up animation */
+@keyframes bidou-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bidou-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-up {
+  animation: bidou-slide-up 220ms ease-out;
+}
+
+.animate-bidou-slide-in-right {
+  animation: bidou-slide-in-right 220ms ease-out;
+}
+
+@utility animate-slide-up {
+  animation: bidou-slide-up 220ms ease-out;
+}
+
+@utility animate-bidou-slide-in-right {
+  animation: bidou-slide-in-right 220ms ease-out;
+}
+
+/* Continuous Auto-Scrolling Marquee */
+@keyframes bidou-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-bidou-marquee {
+  display: flex;
+  width: max-content;
+  animation: bidou-marquee 36s linear infinite;
+  will-change: transform;
+}
+
+.animate-bidou-marquee-reverse {
+  display: flex;
+  width: max-content;
+  animation: bidou-marquee 36s linear infinite reverse;
+  will-change: transform;
+}
+
+.marquee-paused {
+  animation-play-state: paused !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .animate-bidou-marquee:hover,
+  .animate-bidou-marquee-reverse:hover {
+    animation-play-state: paused;
+  }
+}
+
