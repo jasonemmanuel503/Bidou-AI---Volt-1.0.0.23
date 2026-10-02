@@ -368,6 +368,7 @@ export const INITIAL_AI_MODELS: AiModelConfig[] = [
     id: 'mus_lyria_3_pro',
     provider: 'musicapi',
     model_name: 'lyria_3_pro',
+    // TODO(owner): model was labelled "Google Lyria 3 Pro" in prior display_name, but its only supplier is MusicAPI/Sonic.
     display_name: 'Sonic v4.5 (Full Studio)',
     generation_type: 'music',
     pricing_kind: 'per_song',
@@ -382,10 +383,11 @@ export const INITIAL_AI_MODELS: AiModelConfig[] = [
     max_concurrent_variants: 2,
     max_upscale: '1080p',
     upscale_credit_cost: 0,
+    // Source of truth is the model_suppliers table (admin can edit). This is only the catalogue fallback.
     suppliers: [
       { supplier: 'musicapi', upstream_model: 'sonic-v4-5', priority: 1, env: 'both', enabled: true },
     ],
-    prompt_style_guide: 'Sonic v4.5 Full Studio. Describe instrumentation, tempo (BPM), rhythmic feel, arrangement sections, mix character and vocal treatment. Genre and tonality are supplied separately — do not repeat them verbatim in the prompt body.',
+    prompt_style_guide: 'Sonic v4.5 Full Studio. Describe the story the lyrics should tell, plus instrumentation, tempo feel and vocal delivery. Genre and mood are provided as context and should be reflected in the arrangement.',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   },
@@ -413,10 +415,11 @@ export const INITIAL_AI_MODELS: AiModelConfig[] = [
     max_concurrent_variants: 2,
     max_upscale: '1080p',
     upscale_credit_cost: 0,
+    // Source of truth is the model_suppliers table (admin can edit). This is only the catalogue fallback.
     suppliers: [
       { supplier: 'musicapi', upstream_model: 'sonic-v5', priority: 1, env: 'both', enabled: true },
     ],
-    prompt_style_guide: 'Sonic v5, vocalist-forward master. Emphasise vocal timbre, delivery style, ad-libs, harmony stacking and hook structure. Instrumentation is secondary to voice.',
+    prompt_style_guide: 'Sonic v5, vocalist-forward master. Describe the story the lyrics should tell, plus instrumentation, tempo feel and vocal delivery. Genre and mood are provided as context and should be reflected in the arrangement.',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   },

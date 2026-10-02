@@ -18,6 +18,9 @@ export interface GenerationTaskContext {
   jobId: string;
   prompt: string;
   title?: string;
+  upstreamModel?: string;                 // resolved from model_suppliers, music only
+  occasion?: { id: string; subId?: string; details: Record<string, string> } | null;
+  extraTags?: string[];
   enhancedPrompt?: string;
   negativePrompt?: string;
   aspectRatio?: '1:1' | '16:9' | '9:16' | string;

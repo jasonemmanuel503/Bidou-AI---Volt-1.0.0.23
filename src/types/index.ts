@@ -200,6 +200,13 @@ export interface GenerationJob {
   audio_flag?: boolean;
   reference_image_url?: string;
   
+  title?: string;
+  occasion_id?: string;
+  occasion_sub_id?: string;
+  occasion_details?: Record<string, any>;
+  visibility?: 'private' | 'public';
+  share_prompt?: boolean;
+
   // Music specifics
   genre?: string;
   tonality?: string;

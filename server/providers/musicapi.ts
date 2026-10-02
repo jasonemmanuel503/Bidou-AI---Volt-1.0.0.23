@@ -26,6 +26,10 @@ import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
 import { getActualCostUsd } from '../../src/services/providerCatalog';
 import crypto from 'crypto';
 
+import { composeStyle } from '../../src/services/musicStyles';
+import { buildOccasionStyle } from '../occasionPrompts';
+
+const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n));
 const MUSICAPI_BASE_URL = process.env.MUSICAPI_BASE_URL || 'https://api.musicapi.ai';
 
 // Confirmed Sonic model versions supported by MusicAPI POST /api/v1/sonic/create
@@ -57,60 +61,63 @@ export async function startMusicTask(
     return startSunorMusicTask(ctx);
   }
 
-  const { prompt, title, enhancedPrompt, genre, tonality, lyrics, model, userId, jobId, unitCost, variantCount } = ctx;
-  const n = Math.max(1, Math.min(variantCount || 2, 2));
+  const { genre = 'Afrobeats', tonality, lyrics, title } = ctx;
+  const apiKey = (process.env.MUSICAPI_API_KEY || '').trim();
+  const TAGS_MAX = parseInt(process.env.MUSICAPI_TAGS_MAX || '200', 10);
+  const LYRICS_MAX = parseInt(process.env.MUSICAPI_LYRICS_MAX || '3000', 10);
 
-  // 1. Resolve candidate supplier for this model
-  let targetMv = '';
-  try {
-    const plans = await resolveSuppliers(modelId || 'mus_lyria_3_pro');
-    const primaryPlan = plans[0];
-    if (!primaryPlan || primaryPlan.supplier !== 'musicapi' || !isAllowedMusicApiModel(primaryPlan.upstreamModel)) {
-      console.error(`[MusicAPI Provider] Missing or invalid supplier route for model ${modelId}:`, primaryPlan);
-      return Array.from({ length: n }).map(() => ({
-        status: 'failed' as const,
-        errorMessage: 'MODEL_NOT_CONFIGURED',
-        supplier: 'musicapi' as const,
-      }));
-    }
-    targetMv = primaryPlan.upstreamModel;
-  } catch (err: any) {
-    console.error(`[MusicAPI Provider] Supplier resolution failed for model ${modelId}:`, err?.message || err);
-    return Array.from({ length: n }).map(() => ({
-      status: 'failed' as const,
-      errorMessage: 'MODEL_NOT_CONFIGURED',
-      supplier: 'musicapi' as const,
-    }));
+  // The description is NOT lyrics. Lyrics must already be on ctx (written by ensureLyrics in jobs.ts).
+  if (!lyrics || !lyrics.trim()) {
+    return [{ status: 'failed', errorMessage: 'LYRICS_UNAVAILABLE' }, { status: 'failed', errorMessage: 'LYRICS_UNAVAILABLE' }];
+  }
+  if (!ctx.upstreamModel) {
+    return [{ status: 'failed', errorMessage: 'MODEL_ROUTE_MISSING' }, { status: 'failed', errorMessage: 'MODEL_ROUTE_MISSING' }];
   }
 
-  // 2. Credentials check
-  const apiKey = (process.env.MUSICAPI_API_KEY || '').trim();
-  const hasCreds = hasSupplierCredentials('musicapi');
+  const occ = ctx.occasion ? buildOccasionStyle(ctx.occasion.id, ctx.occasion.subId) : null;
+  const { tags, negativeTags } = composeStyle({
+    genre,
+    tonality,
+    occasionTags: occ?.tags,
+    occasionNegative: occ?.negative,
+    extraTags: ctx.extraTags,
+    maxLen: TAGS_MAX,
+  });
 
-  if (!hasCreds) {
-    if (isLiveMode()) {
-      return Array.from({ length: n }).map(() => ({
-        status: 'failed' as const,
-        errorMessage: 'PROVIDER_KEY_MISSING',
-        supplier: 'musicapi' as const,
-        upstreamModel: targetMv,
-      }));
-    }
+  const body: Record<string, unknown> = {
+    custom_mode: true,
+    prompt: clip(lyrics, LYRICS_MAX),               // lyrics, with [Verse]/[Chorus] markers
+    tags,
+    title: clip((title || ctx.prompt || 'Untitled').replace(/\s+/g, ' ').trim(), 80),
+    mv: ctx.upstreamModel,                           // from model_suppliers — see 3.5
+    make_instrumental: false,
+  };
+  // NOT VERIFIED against MusicAPI docs: only enable by env after testing against the live API.
+  if (negativeTags && process.env.MUSICAPI_SEND_NEGATIVE_TAGS === 'true') body.negative_tags = negativeTags;
+  // DO NOT send `audo_lyrics` / `auto_lyrics` — not confirmed in MusicAPI's SDK docs.
 
+  const apiKeyMissing = !apiKey;
+  if (apiKeyMissing && isLiveMode()) {
+    return [{ status: 'failed', errorMessage: 'PROVIDER_KEY_MISSING' }, { status: 'failed', errorMessage: 'PROVIDER_KEY_MISSING' }];
+  }
+
+  const n = Math.max(1, Math.min(ctx.variantCount || 2, 2));
+
+  if (!apiKey) {
     // Fallback simulated takes for preview / demo environments (DEMO ONLY)
     const simBatchId = crypto.randomUUID();
     return Array.from({ length: n }).map((_, idx) => ({
       providerJobId: `sim_music_${simBatchId}:${idx}`,
       status: 'processing' as const,
       supplier: 'musicapi' as const,
-      upstreamModel: targetMv,
+      upstreamModel: ctx.upstreamModel,
       estCostUsd: 0,
       actualCostUsd: 0,
       simulated: true,
     }));
   }
 
-  // 3. Dev cap & daily spend circuit breaker check, protected by in-process async mutex
+  // Dev cap & daily spend circuit breaker check, protected by in-process async mutex
   const estCostUsd =
     getActualCostUsd(modelId, 'musicapi') ||
     (modelId === 'mus_lyria_3_pro' ? 0.11 : 0.12);
@@ -124,7 +131,7 @@ export async function startMusicTask(
         status: 'failed' as const,
         errorMessage: 'MODEL_TEMPORARILY_UNAVAILABLE',
         supplier: 'musicapi' as const,
-        upstreamModel: targetMv,
+        upstreamModel: ctx.upstreamModel,
       }));
       return;
     }
@@ -135,7 +142,7 @@ export async function startMusicTask(
         providerJobId: `sim_music_${simBatchId}:${idx}`,
         status: 'processing' as const,
         supplier: 'musicapi' as const,
-        upstreamModel: targetMv,
+        upstreamModel: ctx.upstreamModel,
         estCostUsd: 0,
         actualCostUsd: 0,
         simulated: true,
@@ -143,19 +150,19 @@ export async function startMusicTask(
       return;
     }
 
-    // 4. Record 1 task attempt in provider_cost_ledger (variant_index = 0)
+    // Record 1 task attempt in provider_cost_ledger (variant_index = 0)
     await recordAttempt({
-      jobId,
+      jobId: ctx.jobId,
       variantIndex: 0,
-      userId,
+      userId: ctx.userId,
       modelId: modelId || 'mus_lyria_3_pro',
       supplier: 'musicapi',
-      upstreamModel: targetMv,
+      upstreamModel: ctx.upstreamModel,
       env: getProviderEnv(),
       units: 1,
       unitLabel: 'task',
       estCostUsd,
-      creditsCharged: (unitCost || 0) * n,
+      creditsCharged: (ctx.unitCost || 0) * n,
     });
   });
 
@@ -163,52 +170,15 @@ export async function startMusicTask(
     return earlyMusicResult;
   }
 
-  // 5. Build MusicAPI request body
-  const stylePrompt = (enhancedPrompt || prompt || '').trim();
-  const hasLyrics = typeof lyrics === 'string' && lyrics.trim().length > 0;
-
-  const isDefaultMakossa =
-    (!genre || genre === 'Makossa') &&
-    (!tonality || tonality === 'Celebratory & Energetic') &&
-    stylePrompt.length > 0 &&
-    !stylePrompt.toLowerCase().includes('makossa');
-
-  const styleTags = isDefaultMakossa
-    ? stylePrompt.slice(0, 200)
-    : [stylePrompt, genre, tonality]
-        .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
-        .join(', ')
-        .slice(0, 200) || 'Afrobeats';
-
-  const cleanTitle = (title || '').trim() || stylePrompt.split(',')[0]?.trim().slice(0, 50) || 'Untitled Track';
-
-  const requestBody = hasLyrics
-    ? {
-        custom_mode: true,
-        prompt: lyrics!.trim(),
-        tags: styleTags,
-        title: cleanTitle.slice(0, 80),
-        mv: targetMv,
-        make_instrumental: false,
-      }
-    : {
-        custom_mode: true,
-        prompt: '',
-        tags: styleTags,
-        title: cleanTitle.slice(0, 80),
-        mv: targetMv,
-        make_instrumental: stylePrompt.toLowerCase().includes('instrumental'),
-        gpt_description_prompt: stylePrompt.slice(0, 400),
-      };
-
   try {
+    console.info('[MusicAPI] create', { mv: body.mv, tags: body.tags, title: body.title });
     const response = await fetch(`${MUSICAPI_BASE_URL}/api/v1/sonic/create`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -231,21 +201,21 @@ export async function startMusicTask(
       providerJobId: `${taskId}:${idx}`,
       status: 'processing' as const,
       supplier: 'musicapi' as const,
-      upstreamModel: targetMv,
+      upstreamModel: ctx.upstreamModel,
       estCostUsd: idx === 0 ? estCostUsd : 0,
       simulated: false,
     }));
   } catch (err: any) {
     console.error('[MusicAPI Provider] Error starting task:', err?.message || err);
     recordProviderFailure('musicapi', err?.message || 'musicapi_start_error');
-    await markFailed(jobId, 0, 'musicapi', 'MUSICAPI_DISPATCH_ERR');
+    await markFailed(ctx.jobId, 0, 'musicapi', 'MUSICAPI_DISPATCH_ERR');
 
     if (isLiveMode()) {
       return Array.from({ length: n }).map(() => ({
         status: 'failed' as const,
         errorMessage: 'PROVIDER_UNAVAILABLE',
         supplier: 'musicapi' as const,
-        upstreamModel: targetMv,
+        upstreamModel: ctx.upstreamModel,
       }));
     }
 
@@ -254,7 +224,7 @@ export async function startMusicTask(
       providerJobId: `sim_music_${simBatchId}:${idx}`,
       status: 'processing' as const,
       supplier: 'musicapi' as const,
-      upstreamModel: targetMv,
+      upstreamModel: ctx.upstreamModel,
       estCostUsd: 0,
       actualCostUsd: 0,
       simulated: true,

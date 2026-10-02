@@ -13,6 +13,8 @@ import {
 } from './db';
 import { isLiveMode } from './config/mode';
 import { updateLedgerCreditsCharged, markFailed, markSucceeded } from './costLedger';
+import { resolveSuppliers } from './providers/suppliers';
+import { ensureLyrics } from './occasionPrompts';
 
 // NOTE: Assumes a single server instance; horizontal scaling needs a DB lease so two instances do not poll the same job.
 // Active in-process AbortControllers for cancellation support
@@ -150,6 +152,29 @@ export async function dispatchJobVariants(
     }
 
     if (job.type === 'music') {
+      // 1) Resolve the real upstream model from the model_suppliers table (admin-controlled), not a constant.
+      const plans = await resolveSuppliers(ctx.model.id, { allowUnconfiguredInDev: !isLiveMode() });
+      const musicPlan = plans.find((p) => p.supplier === 'musicapi');
+      ctx.upstreamModel = musicPlan?.upstreamModel;
+
+      // 2) Make sure real lyrics exist. The description is the brief, never the lyrics.
+      if (!ctx.lyrics || !ctx.lyrics.trim()) {
+        try {
+          const written = await ensureLyrics(ctx);          // new, in server/occasionPrompts.ts
+          ctx.lyrics = written.lyrics;
+          if (written.extraTags?.length) ctx.extraTags = written.extraTags;
+          await updateJob(job.id, { lyrics: written.lyrics } as any);   // so the library shows them
+        } catch (lyricErr: any) {
+          console.error('[Job Engine] Lyrics composition failed:', lyricErr?.message || lyricErr);
+          for (const v of variants) {
+            await updateJobVariant(job.id, v.variant_index, { status: 'failed', error_message: 'LYRICS_UNAVAILABLE', completed_at: new Date().toISOString() } as any);
+          }
+          await finalizeAndSettleJob(job.id, 'LYRICS_UNAVAILABLE');   // existing path refunds the reservation
+          activeAbortControllers.delete(job.id);
+          return;
+        }
+      }
+
       // Asynchronous MusicAPI (Sonic v4.5 / Sonic v5) or Sunor task
       const results = await startMusicTask(ctx);
       for (let i = 0; i < variants.length; i++) {
@@ -160,7 +185,7 @@ export async function dispatchJobVariants(
             provider_job_id: res.providerJobId,
             error_message: res.errorMessage,
             supplier: res.supplier || 'musicapi',
-            upstream_model: res.upstreamModel || ctx.model.model_name,
+            upstream_model: res.upstreamModel || ctx.upstreamModel || ctx.model.model_name,
             simulated: Boolean(res.simulated),
             started_at: new Date().toISOString(),
             ...(res.status === 'failed' ? { completed_at: new Date().toISOString() } : {}),

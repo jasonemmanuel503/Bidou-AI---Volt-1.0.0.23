@@ -32,6 +32,7 @@ import { TIER_VARIANT_CAP, TIER_RANK } from '../../services/tiers';
 import { getEnhanceErrorPresentation, EnhanceErrorPresentation } from '../../lib/errorMapping';
 import type { PlanLimitInfo } from '../../services/apiClient';
 import { toast } from '../../services/toast';
+import { genreOptions, tonalityOptions } from '../../services/musicStyles';
 
 export interface EnhancePromptContext {
   rawPrompt: string;
@@ -45,6 +46,8 @@ export interface EnhancePromptContext {
   tonality?: string;
   hasReferenceImage?: boolean;
   previousVariants?: string[];
+  occasion?: any;
+  language?: string;
 }
 
 export interface TabState {
@@ -63,6 +66,8 @@ export interface TabState {
   musicGenre: string;
   musicTonality: string;
   musicLyrics: string;
+  musicLanguage?: string;
+  musicOccasion?: any;
   coverArtUrl: string | null;
 }
 
@@ -131,6 +136,8 @@ export const makeDefaultTabState = (
     musicGenre: 'Makossa',
     musicTonality: 'Celebratory & Energetic',
     musicLyrics: '',
+    musicLanguage: 'French / English / Camfranglais',
+    musicOccasion: null,
     coverArtUrl: null,
   };
 };
@@ -173,10 +180,20 @@ export interface UnifiedPromptBoxProps {
     lyrics?: string;
     title?: string;
     variantCount?: number;
+    occasion?: any;
+    language?: string;
     clientSettings?: Record<string, any>;
   }) => Promise<void>;
   onEnhancePrompt: (context: EnhancePromptContext) => Promise<string>;
-  onGenerateLyrics: (params: { title: string; genre: string; tonality: string }) => Promise<string>;
+  onGenerateLyrics: (params: {
+    title: string;
+    genre: string;
+    tonality: string;
+    description?: string;
+    language?: string;
+    occasion?: any;
+    instructions?: string;
+  }) => Promise<string>;
   onRewriteLyrics: (lyrics: string) => Promise<string>;
   onGenerateCoverArt: (params: { title: string; genre: string }) => Promise<string>;
   isGenerating?: boolean;
@@ -719,6 +736,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
 
   // High-value confirmation dialog state (Section 3.3)
   const [highValueConfirmOpen, setHighValueConfirmOpen] = useState(false);
+  const [lyricsError, setLyricsError] = useState<string | null>(null);
 
   // Handle Prompt Enhancement (Section 2.3.1)
   const handleEnhance = async () => {
@@ -743,6 +761,8 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         resolution:     activeTab === 'video' ? current.videoResolution : undefined,
         genre:          activeTab === 'music' ? current.musicGenre : undefined,
         tonality:       activeTab === 'music' ? current.musicTonality : undefined,
+        occasion:       activeTab === 'music' ? current.musicOccasion : undefined,
+        language:       activeTab === 'music' ? current.musicLanguage : undefined,
         hasReferenceImage: !!current.referenceFileUrl,
         previousVariants: enhanceHistory, // so Gemini avoids repeating itself
       });
@@ -782,13 +802,20 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
   // Handle Music Lyrics Generation & Rewrite
   const handleGenerateLyricsClick = async () => {
     setIsGeneratingLyrics(true);
+    setLyricsError(null);
     try {
       const generated = await onGenerateLyrics({
         title: current.musicTitle || 'Chant de Joie',
         genre: current.musicGenre,
         tonality: current.musicTonality,
+        description: current.prompt,
+        language: current.musicLanguage,
+        occasion: current.musicOccasion,
       });
       patchTab({ musicLyrics: generated });
+    } catch (err: any) {
+      console.error('[Lyrics Generation Error]', err);
+      setLyricsError(err?.message || 'Failed to generate lyrics. Please check your connection and try again.');
     } finally {
       setIsGeneratingLyrics(false);
     }
@@ -837,6 +864,10 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
       musicGenre: snapshot.musicGenre,
       musicTonality: snapshot.musicTonality,
       musicLyrics: snapshot.musicLyrics,
+      musicLanguage: snapshot.musicLanguage,
+      musicOccasion: snapshot.musicOccasion,
+      occasion: snapshot.musicOccasion,
+      language: snapshot.musicLanguage,
       originalPrompt: snapshot.originalPrompt || snapshot.prompt,
       enhancedPrompt: isEnhanced ? snapshot.prompt : null,
       referenceFileName: snapshot.referenceFileName || null,
@@ -866,37 +897,24 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
           clientSettings,
         });
       } else if (activeTab === 'music') {
-        const isUntouchedDefaultGenre =
-          snapshot.musicGenre === 'Makossa' &&
-          snapshot.musicTonality === 'Celebratory & Energetic' &&
-          !finalPrompt.toLowerCase().includes('makossa');
-        const promptClauses = finalPrompt
-          .split(/[,.;]/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const effectiveGenre = isUntouchedDefaultGenre
-          ? promptClauses[0]?.slice(0, 36) || snapshot.musicGenre
-          : snapshot.musicGenre;
-        const effectiveTonality = isUntouchedDefaultGenre
-          ? promptClauses.find((c, idx) => idx > 0 && /\b(\d{2,3}\s*bpm|minor|major|romantic|melancholic|emotional|uplifting|intimate|energetic)\b/i.test(c))?.slice(0, 36) ||
-            promptClauses[1]?.slice(0, 36) ||
-            ''
-          : snapshot.musicTonality;
-
         await onGenerateMusic({
           prompt: finalPrompt,
           enhancedPrompt,
           modelId: activeModel?.id || snapshot.modelId,
-          genre: effectiveGenre,
-          tonality: effectiveTonality,
+          genre: snapshot.musicGenre,
+          tonality: snapshot.musicTonality,
           lyrics: snapshot.musicLyrics || undefined,
           title: snapshot.musicTitle || undefined,
+          occasion: snapshot.musicOccasion,
+          language: snapshot.musicLanguage,
           variantCount: effectiveCap,
           clientSettings: {
             ...clientSettings,
             title: snapshot.musicTitle || undefined,
-            musicGenre: effectiveGenre,
-            musicTonality: effectiveTonality,
+            musicGenre: snapshot.musicGenre,
+            musicTonality: snapshot.musicTonality,
+            occasion: snapshot.musicOccasion,
+            language: snapshot.musicLanguage,
           },
         });
       }
@@ -1029,26 +1047,6 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
           ? `Not supported by ${activeModel?.display_name || 'selected model'}`
           : undefined,
     },
-  ];
-
-  const musicGenreOptions = [
-    { value: 'Makossa', label: 'Makossa (Cameroon Bass & Brass)' },
-    { value: 'Bikutsi', label: 'Bikutsi (Fast Rhythmic Central African Drive)' },
-    { value: 'Mbolé', label: 'Mbolé (Street Percussion & Modern Poly-rhythms)' },
-    { value: 'Amapiano', label: 'Amapiano (Log-drum Deep House Grooves)' },
-    { value: 'Afrobeats', label: 'Afrobeats (Lagos / Global Afro-fusion)' },
-    { value: 'Highlife', label: 'Highlife (Warm West African Guitars)' },
-    { value: 'African Cinematic', label: 'African Cinematic Orchestral' },
-    { value: 'Gospel', label: 'African Praise & Worship Gospel' },
-    { value: 'Zouk', label: 'Afro-Zouk / Sensual Grooves' },
-  ];
-
-  const musicTonalityOptions = [
-    { value: 'Celebratory & Energetic', label: 'Celebratory & Festive' },
-    { value: 'Passionate & Romantic', label: 'Love & Sensual' },
-    { value: 'Spiritual & Deep', label: 'Soulful & Uplifting' },
-    { value: 'Street Anthem', label: 'High-energy Club Anthem' },
-    { value: 'Cinematic & Melancholic', label: 'Reflective & Emotional' },
   ];
 
   const getPlaceholderText = () => {
@@ -1246,7 +1244,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                   <div className="flex flex-col">
                     <CustomSelect
                       label="African Genre"
-                      options={musicGenreOptions}
+                      options={genreOptions(current.musicGenre)}
                       value={current.musicGenre}
                       onChange={(val) => patchTab({ musicGenre: val })}
                     />
@@ -1256,7 +1254,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                   <div className="flex flex-col">
                     <CustomSelect
                       label="Vibe & Tonality"
-                      options={musicTonalityOptions}
+                      options={tonalityOptions()}
                       value={current.musicTonality}
                       onChange={(val) => patchTab({ musicTonality: val })}
                     />
@@ -1265,6 +1263,16 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
 
                 {/* Lyrics Section */}
                 <div className="flex flex-col gap-2 pt-2 border-t border-[#FF8800]/10">
+                  {lyricsError && (
+                    <div className="mb-1">
+                      <InlineNotice
+                        variant="error"
+                        title="Lyrics Generation Failed"
+                        message={lyricsError}
+                        onDismiss={() => setLyricsError(null)}
+                      />
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold text-[#1A1A1E] dark:text-[#F5F5F7] flex items-center gap-1.5">
                       <FileMusic size={13} className="text-[#F86A00]" />

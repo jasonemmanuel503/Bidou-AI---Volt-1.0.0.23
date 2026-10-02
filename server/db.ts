@@ -534,6 +534,12 @@ export async function createGenerationJob(job: Partial<GenerationJob> & {
         credits_refunded: 0,
         reservation_id: job.reservation_id,
         idempotency_key: job.idempotency_key,
+        title: job.title,
+        occasion_id: job.occasion_id,
+        occasion_sub_id: job.occasion_sub_id,
+        occasion_details: job.occasion_details,
+        visibility: job.visibility || 'private',
+        share_prompt: !!job.share_prompt,
         client_settings: job.client_settings || {},
         created_at: new Date().toISOString(),
       });

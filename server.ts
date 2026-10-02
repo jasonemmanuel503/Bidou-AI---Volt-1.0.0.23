@@ -14,6 +14,11 @@ import { COVER_ART_ROUTE_KEY, IMAGE_ROUTES } from './src/services/providerCatalo
 import { PlanTier } from './src/types';
 import { saveGenerationAsset } from './server/storage';
 import { signMediaUrl, verifyMediaSignature } from './server/mediaSigning';
+import {
+  sanitizeOccasionInput,
+  buildOccasionEnhancerContext,
+  composeLyrics,
+} from './server/occasionPrompts';
 
 import {
   getSupabaseAdmin,
@@ -984,6 +989,10 @@ app.post('/api/ai/generate', async (req, res) => {
       lyrics,
       coverArtUrl,
       idempotencyKey: bodyIdempotencyKey,
+      title,
+      occasion: rawOccasion,
+      shareToShowcase,
+      sharePrompt,
     } = req.body;
 
     if (!prompt || typeof prompt !== 'string') {
@@ -1045,6 +1054,15 @@ app.post('/api/ai/generate', async (req, res) => {
         licensingVerified: Boolean(rawModel.licensing_verified),
       });
     }
+
+    let occasion = null;
+    if (rawModel.generation_type === 'music' && rawOccasion) {
+      const parsed = sanitizeOccasionInput(rawOccasion);       // from server/occasionPrompts.ts
+      if (!parsed.ok) return res.status(400).json({ error: 'INVALID_OCCASION', message: (parsed as { ok: false; message: string }).message });
+      occasion = parsed.value;
+    }
+    const cleanTitle = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim().slice(0, 80) : undefined;
+    const cleanLyrics = typeof lyrics === 'string' ? lyrics.slice(0, 5000) : undefined;
 
     // 3.2 Duration and resolution are allowed by video_options of THAT model -> else INVALID_OPTIONS
     if (rawModel.generation_type === 'video' && rawModel.video_options) {
@@ -1253,6 +1271,11 @@ app.post('/api/ai/generate', async (req, res) => {
       (typeof rawClientSettings.title === 'string' && rawClientSettings.title.trim()) ||
       undefined;
 
+    const finalTitle = cleanTitle || explicitTitle;
+    const finalLyrics = cleanLyrics || lyrics;
+    const visibility = shareToShowcase ? 'public' : 'private';
+    const sharePromptBool = Boolean(sharePrompt);
+
     // 7. Insert generation_jobs row
     await createGenerationJob({
       id: jobId,
@@ -1271,13 +1294,19 @@ app.post('/api/ai/generate', async (req, res) => {
       batch_count: n,
       genre,
       tonality,
-      lyrics,
+      lyrics: finalLyrics,
       cover_art_url: coverArtUrl,
       credits_reserved: quote.totalCost,
       idempotency_key: idempotencyKey,
+      title: finalTitle,
+      occasion_id: occasion?.id,
+      occasion_sub_id: occasion?.subId,
+      occasion_details: occasion?.details,
+      visibility,
+      share_prompt: sharePromptBool,
       client_settings: {
         ...rawClientSettings,
-        ...(explicitTitle ? { title: explicitTitle, musicTitle: explicitTitle } : {}),
+        ...(finalTitle ? { title: finalTitle, musicTitle: finalTitle } : {}),
       },
     });
 
@@ -1407,10 +1436,16 @@ app.post('/api/ai/generate', async (req, res) => {
       batch_count: n,
       genre,
       tonality,
-      lyrics,
+      lyrics: finalLyrics,
       cover_art_url: coverArtUrl,
       credits_reserved: quote.totalCost,
       reservation_id: reservationId,
+      title: finalTitle,
+      occasion_id: occasion?.id,
+      occasion_sub_id: occasion?.subId,
+      occasion_details: occasion?.details,
+      visibility,
+      share_prompt: sharePromptBool,
       output_urls: [],
       created_at: new Date().toISOString(),
     };
@@ -1419,7 +1454,8 @@ app.post('/api/ai/generate', async (req, res) => {
       userId: user.id,
       jobId,
       prompt,
-      title: explicitTitle,
+      title: finalTitle,
+      occasion,
       enhancedPrompt,
       negativePrompt,
       aspectRatio,
@@ -1428,7 +1464,7 @@ app.post('/api/ai/generate', async (req, res) => {
       audioFlag: audioFlag !== false,
       genre,
       tonality,
-      lyrics,
+      lyrics: finalLyrics,
       coverArtUrl,
       model: selectedModel,
       variantCount: n,
@@ -2549,6 +2585,7 @@ app.post('/api/ai/enhance-prompt', async (req, res) => {
     prompt, mediaType, modelId, aspectRatio, variantCount,
     durationSeconds, resolution, genre, tonality,
     hasReferenceImage, previousVariants = [],
+    occasion: rawOccasion, language,
   } = req.body;
 
   if (!prompt || typeof prompt !== 'string') {
@@ -2567,8 +2604,20 @@ app.post('/api/ai/enhance-prompt', async (req, res) => {
   if (aspectRatio)      constraints.push(`Output aspect ratio: ${aspectRatio}.`);
   if (durationSeconds)  constraints.push(`Clip duration: ${durationSeconds}s — the entire described action must resolve within it.`);
   if (resolution)       constraints.push(`Render resolution: ${resolution}.`);
-  if (genre)            constraints.push(`Musical genre (already supplied to the model separately — do NOT restate it): ${genre}.`);
-  if (tonality)         constraints.push(`Mood (already supplied separately — do NOT restate it): ${tonality}.`);
+  if (model.generation_type === 'music') {
+    if (genre)    constraints.push(`Musical genre: ${genre}. Name concrete instruments, rhythm feel and arrangement typical of it.`);
+    if (tonality) constraints.push(`Mood: ${tonality}.`);
+    constraints.push('The rewritten text is a SONG BRIEF (story/message of the lyrics + instrumentation + vocal style). It will be handed to a lyric writer. Do NOT write lyrics yourself and do NOT include section markers.');
+    if (rawOccasion) {
+      const parsed = sanitizeOccasionInput(rawOccasion);
+      if (parsed.ok) {
+        constraints.push(buildOccasionEnhancerContext(parsed.value));
+      }
+    }
+  } else {
+    if (genre)            constraints.push(`Genre: ${genre}.`);
+    if (tonality)         constraints.push(`Mood: ${tonality}.`);
+  }
   if (hasReferenceImage) constraints.push('A reference image is attached; describe how the output should relate to it rather than re-describing it from scratch.');
   if (variantCount > 1) constraints.push(`${variantCount} variants render from this one prompt — leave room for meaningful variation; do not over-specify every pixel.`);
 
@@ -2621,50 +2670,38 @@ ${previousVariants.length ? `8. You have already produced the variants below. Pr
   }
 });
 
-// AI Lyrics Generation (Section 10.8: Title, instructions, genre, and tonality)
+// AI Lyrics Generation (Phase 3.9)
 app.post('/api/ai/generate-lyrics', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.trim()) {
+    return res.status(401).json({ error: 'UNAUTHORIZED', detail: 'Bearer token is required' });
+  }
+  const user = await resolveUserFromAuthHeader(authHeader);
+  if (!user) return res.status(401).json({ error: 'UNAUTHORIZED', detail: 'Bearer token is required' });
+  const rc = enhanceLimiter.tryConsume(user.id);                 // reuse the existing limiter (20 burst / 20 per min)
+  if (!rc.allowed) {
+    res.setHeader('Retry-After', String(rc.retryAfterSeconds || 5));
+    return res.status(429).json({ error: 'RATE_LIMIT_EXCEEDED', retryAfter: rc.retryAfterSeconds });
+  }
+
+  const { title, genre, tonality, instructions, description, language, occasion: rawOccasion } = req.body || {};
+  let occasion = null;
+  if (rawOccasion) {
+    const p = sanitizeOccasionInput(rawOccasion);
+    if (!p.ok) return res.status(400).json({ error: 'INVALID_OCCASION', message: (p as { ok: false; message: string }).message });
+    occasion = p.value;
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    if (isLiveMode()) return res.status(503).json({ error: 'LYRICS_UNAVAILABLE' });
+    return res.json({ lyrics: '[Verse 1]\nDemo lyrics (set GEMINI_API_KEY for real lyrics)\n\n[Chorus]\nLa la la…' });   // demo mode only
+  }
   try {
-    const { title, genre, tonality, instructions } = req.body;
-    const promptText = `Generate lyrics for an African-influenced or contemporary song titled "${title || 'Untitled'}".
-Genre: ${genre || 'Afrobeats'}
-Tonality / Mood: ${tonality || 'Celebratory'}
-Special Instructions: ${instructions || 'Verse, Pre-Chorus, Chorus, Verse 2, Chorus, Outro'}.
-Incorporate culturally authentic multilingual phrasing where appropriate (English, French, Pidgin, or Camfranglais).
-Format cleanly with section headers like [Verse 1], [Chorus], etc.`;
-
-    if (process.env.GEMINI_API_KEY) {
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: promptText,
-      });
-      return res.json({ lyrics: response.text ? response.text.trim() : '' });
-    } else {
-      const fallbackLyrics = `[Verse 1]
-Early morning sun shining on the bay,
-From Douala to Yaoundé we make our way.
-Every rhythm in our step, every heartbeat strong,
-Listen closely as we sing this brand new song.
-
-[Chorus]
-Oh Bidou, feel the energy rise,
-African dream lighting up the skies!
-With every beat and every sound,
-Joy and fire all around!
-
-[Verse 2]
-Through the city lights and the open street,
-Every generation dancing to the beat.
-Hold your head up high, never let it go,
-This is the rhythm of our soul!
-
-[Outro]
-Bidou AI, we are shining bright.`;
-      return res.json({ lyrics: fallbackLyrics });
-    }
+    const written = await composeLyrics({ title, genre, tonality, instructions, description, language, occasion });
+    return res.json({ lyrics: written.lyrics, title: written.title });
   } catch (err: any) {
-    console.error('Error generating lyrics:', err);
-    return res.status(500).json({ error: 'Failed to generate lyrics' });
+    console.error('[generate-lyrics] failed:', err?.message || err);
+    return res.status(502).json({ error: 'LYRICS_FAILED' });
   }
 });
 
@@ -2716,6 +2753,9 @@ ${currentLyrics}`,
         });
         return res.json({ rewrittenLyrics: response.text ? response.text.trim() : currentLyrics });
       } else {
+        if (isLiveMode()) {
+          throw new Error('LYRICS_UNAVAILABLE');
+        }
         const rewritten = currentLyrics
           .split('\n')
           .map((line: string) => (line.startsWith('[') ? line : `${line} ♪`))
@@ -2730,6 +2770,9 @@ ${currentLyrics}`,
         referenceId: `ref_${refId}`,
         description: 'Refund for failed lyrics rewrite',
       }).catch((rErr) => console.error('[Rewrite] Refund failed:', rErr));
+      if (genErr?.message === 'LYRICS_UNAVAILABLE') {
+        return res.status(503).json({ error: 'LYRICS_UNAVAILABLE' });
+      }
       throw genErr;
     }
   } catch (err: any) {
