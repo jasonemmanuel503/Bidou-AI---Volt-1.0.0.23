@@ -1,6 +1,12 @@
 import { getAuthHeaders as getAuthHeadersFromToken } from './authToken';
 import type { AiModelConfig, PlanTier, SupplierId, VideoOptions } from '../types';
 import type { ModelPriceTableEntry } from './pricingEngine';
+import type {
+  CoverArtJobDto,
+  CoverArtOptionsResponse,
+  CreateCoverArtRequest,
+  RecompositeRequest,
+} from './coverArtCatalog';
 
 export interface WalletResponse {
   balance: number;
@@ -242,6 +248,84 @@ export async function apiGenerateCoverArt(params: {
       throw err;
     }
     throw new Error(data.error || 'Failed to generate cover art');
+  }
+  return res.json();
+}
+
+export async function apiGetCoverArtOptions(): Promise<CoverArtOptionsResponse> {
+  const res = await fetch('/api/ai/cover-art/options');
+  if (!res.ok) {
+    throw new Error('Failed to fetch cover art options');
+  }
+  return res.json();
+}
+
+export async function apiCreateCoverArt(
+  payload: CreateCoverArtRequest
+): Promise<{ id: string; status: string; estimatedSeconds: number }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/cover-art', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 402 || data.error === 'INSUFFICIENT_CREDITS') {
+      const err: any = new Error('INSUFFICIENT_CREDITS');
+      err.status = 402;
+      err.required = data.required;
+      err.available = data.available;
+      throw err;
+    }
+    throw new Error(data.detail || data.error || 'Failed to create cover art job');
+  }
+  return data;
+}
+
+export async function apiGetCoverArtJob(jobId: string): Promise<CoverArtJobDto> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/ai/cover-art/${encodeURIComponent(jobId)}`, {
+    headers,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || data.error || 'Failed to get cover art status');
+  }
+  return res.json();
+}
+
+export async function apiSelectCoverArtVersion(
+  jobId: string,
+  versionIndex: number
+): Promise<{ success: boolean; coverUrl: string; thumbnailUrl: string }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/ai/cover-art/${encodeURIComponent(jobId)}/select`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ versionIndex }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || data.error || 'Failed to select version');
+  }
+  return res.json();
+}
+
+export async function apiRecompositeCoverArt(
+  jobId: string,
+  params: RecompositeRequest
+): Promise<{ success: boolean; job: CoverArtJobDto }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/ai/cover-art/${encodeURIComponent(jobId)}/recomposite`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || data.error || 'Failed to re-composite artwork');
   }
   return res.json();
 }

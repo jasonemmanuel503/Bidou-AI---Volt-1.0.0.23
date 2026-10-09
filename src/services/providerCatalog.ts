@@ -64,8 +64,8 @@ export const IMAGE_ROUTES: Record<string, ImageRoute> = {
   nano_banana_pro: { googleModelId: 'gemini-3-pro-image', imageSize: '2K', providerCostUsd: 0.134 },
 };
 
-/** Model used for the paid "cover art" add-on (cheapest verified image model). */
-export const COVER_ART_ROUTE_KEY = 'nano_banana_2_lite';
+/** Model used for the paid "cover art" add-on / Standard engine (FLUX.2 Klein 9B on Cloudflare). */
+export const COVER_ART_ROUTE_KEY = 'cf_flux2_klein_9b';
 
 /** Music providers bill per TASK (2 takes returned per task), never per take. USD per task. */
 export const MUSIC_PROVIDER_COST_USD: Record<string, number> = {
@@ -95,6 +95,10 @@ export const PRICE_BOOK: Record<string, Partial<Record<SupplierId, Rate>>> = {
   img_cf_flux2_klein_4b: {
     // Source: https://developers.cloudflare.com/workers-ai/models/flux-2-klein-4b/ (verified 2 Oct 2026) — 1024x1024
     cloudflare: { kind: 'per_image', usd: 0.00115 },
+  },
+  img_cf_flux2_klein_9b: {
+    // Source: Cloudflare Workers AI pricing ($0.015 base MP + $0.002 extra MP + $0.002 input MP ≈ $0.019 per version)
+    cloudflare: { kind: 'per_image', usd: 0.019 },
   },
 
   // Google Imagen / Gemini Image Models (existing rates preserved)
@@ -165,6 +169,7 @@ export const PRICE_BOOK: Record<string, Partial<Record<SupplierId, Rate>>> = {
 const MODEL_KEY_ALIASES: Record<string, string> = {
   cf_flux1_schnell: 'img_cf_flux1_schnell',
   cf_flux2_klein_4b: 'img_cf_flux2_klein_4b',
+  cf_flux2_klein_9b: 'img_cf_flux2_klein_9b',
   nano_banana_2_lite: 'img_nano_banana_2_lite',
   nano_banana_2: 'img_nano_banana_2',
   nano_banana_pro: 'img_nano_banana_pro',

@@ -810,7 +810,7 @@ export default function App() {
     }
   };
 
-  // Handle Cover Art Generation (120 credits add-on)
+  // Handle Cover Art Generation (Standard 240 / Pro 500)
   const handleGenerateCoverArt = async (params: { title: string; genre: string }): Promise<string> => {
     try {
       const res = await apiGenerateCoverArt(params);
@@ -821,10 +821,10 @@ export default function App() {
         setOutOfCreditsModal({
           isOpen: true,
           mediaType: 'image',
-          required: err.required || 120,
+          required: err.required || 240,
           currentBalance: err.available ?? wallet.balance,
           variantCount: 1,
-          unitCost: err.required || 120,
+          unitCost: err.required || 240,
         });
       }
       throw err;

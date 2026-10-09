@@ -113,6 +113,7 @@ import {
 } from './server/planLimits';
 import { registerModelsAndAdminRoutes } from './server/modelsApi';
 import { logStartupValidationTable } from './server/adminAuth';
+import { registerCoverArtRoutes } from './server/coverArt/routes';
 
 dotenv.config();
 
@@ -988,6 +989,20 @@ app.post('/api/ai/generate', async (req, res) => {
       return res.status(400).json({ error: 'A valid prompt string is required' });
     }
 
+    // Validate coverArtUrl format, length and protocol
+    let validatedCoverArtUrl: string | null = null;
+    if (typeof coverArtUrl === 'string' && coverArtUrl.trim().length > 0) {
+      const trimmed = coverArtUrl.trim();
+      try {
+        const parsed = new URL(trimmed);
+        if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && trimmed.length <= 2048) {
+          validatedCoverArtUrl = trimmed;
+        }
+      } catch {
+        // ignore invalid URL
+      }
+    }
+
     // 2. Idempotency Check (with per-key lock to prevent concurrent duplicate job creation)
     const idempotencyKey = bodyIdempotencyKey || (req.headers['idempotency-key'] as string);
     let releaseIdempotencyLock: (() => void) | null = null;
@@ -1210,25 +1225,21 @@ app.post('/api/ai/generate', async (req, res) => {
     const fallbackReason = decision.fallbackReason;
 
     // 5. Authoritative server-side pricing using validated values (never client numbers)
-    let coverArtAddonCredits = 0;
+    // Dead add-on guard: Cover art is now handled via dedicated /api/ai/cover-art workflow
     if (selectedModel.generation_type === 'music' && (req.body.musicAddons?.generateCoverArt || req.body.generateCoverArt)) {
-      const coverModel = INITIAL_AI_MODELS.find((m) => m.model_name === COVER_ART_ROUTE_KEY);
-      coverArtAddonCredits = coverModel
-        ? quoteGenerationCost({ model: coverModel, variantCount: 1 }).totalCost
-        : Math.round(IMAGE_ROUTES.nano_banana_2_lite.providerCostUsd * 571.23 * 1.03 / (0.3 * 0.975));
+      return res.status(400).json({
+        error: 'DEPRECATED_PARAM',
+        detail: 'Cover art add-on inside /api/ai/generate is deprecated. Please use the Cover Art Studio (/api/ai/cover-art) instead.',
+      });
     }
 
-    const baseQuote = quoteGenerationCost({
+    const quote = quoteGenerationCost({
       model: selectedModel,
       durationSeconds: Number(durationSeconds),
       resolution,
       includeAudio: audioFlag !== false,
       variantCount: n,
     });
-    const quote = {
-      ...baseQuote,
-      totalCost: baseQuote.totalCost + coverArtAddonCredits,
-    };
     const effectiveDuration =
       selectedModel.generation_type === 'video'
         ? Number(durationSeconds)
@@ -1292,7 +1303,7 @@ app.post('/api/ai/generate', async (req, res) => {
       genre: effectiveGenre,
       tonality: effectiveTonality,
       lyrics: finalLyrics,
-      cover_art_url: coverArtUrl,
+      cover_art_url: validatedCoverArtUrl,
       credits_reserved: quote.totalCost,
       idempotency_key: idempotencyKey,
       title: finalTitle,
@@ -1434,7 +1445,7 @@ app.post('/api/ai/generate', async (req, res) => {
       genre: effectiveGenre,
       tonality: effectiveTonality,
       lyrics: finalLyrics,
-      cover_art_url: coverArtUrl,
+      cover_art_url: validatedCoverArtUrl,
       credits_reserved: quote.totalCost,
       reservation_id: reservationId,
       title: finalTitle,
@@ -1463,7 +1474,7 @@ app.post('/api/ai/generate', async (req, res) => {
       genre: effectiveGenre,
       tonality: effectiveTonality,
       lyrics: finalLyrics,
-      coverArtUrl,
+      coverArtUrl: validatedCoverArtUrl,
       model: selectedModel,
       variantCount: n,
       unitCost: quote.unitCost,
@@ -2779,129 +2790,10 @@ ${currentLyrics}`,
   }
 });
 
-// Cover Art Generation Endpoint (Section F.6 — real Imagen generation saved to storage bucket)
-app.post('/api/ai/generate-cover-art', async (req, res) => {
-  try {
-    const user = await resolveUserFromAuthHeader(req.headers.authorization);
-    if (!user) {
-      return res.status(401).json({ error: 'UNAUTHORIZED', detail: 'Bearer token is required' });
-    }
-
-    const { title, genre, aspectRatio = '1:1' } = req.body;
-    const cost = 120; // 120 credits add-on
-    const refId = `cover_${crypto.randomUUID()}`;
-
-    try {
-      await debitCredits({
-        userId: user.id,
-        amount: cost,
-        referenceId: refId,
-        description: 'Cover Art Generation Add-on',
-      });
-    } catch (creditErr: any) {
-      if (creditErr?.message?.includes('INSUFFICIENT_CREDITS')) {
-        const wallet = await getUserWallet(user.id);
-        return res.status(402).json({
-          error: 'INSUFFICIENT_CREDITS',
-          required: cost,
-          available: wallet?.balance ?? 0,
-        });
-      }
-      throw creditErr;
-    }
-
-    try {
-      const prompt = `Album cover art for single titled "${title || 'Echoes of the Motherland'}", genre: ${genre || 'Afrobeats'}, cinematic lighting, award-winning visual aesthetic, bold typography, vivid colors, 8k resolution`;
-
-      const ai = getGeminiClient();
-      let imageBuffer: Buffer | null = null;
-
-      if (process.env.GEMINI_API_KEY && ai) {
-        try {
-          const response: any = await (ai.models as any).generateImages({
-            model: 'imagen-3.0-generate-002',
-            prompt,
-            config: {
-              numberOfImages: 1,
-              aspectRatio: aspectRatio === '9:16' ? '9:16' : aspectRatio === '16:9' ? '16:9' : '1:1',
-              outputMimeType: 'image/png',
-            },
-          });
-
-          if (response?.generatedImages?.[0]?.image?.imageBytes) {
-            imageBuffer = Buffer.from(response.generatedImages[0].image.imageBytes, 'base64');
-          }
-        } catch (imagenErr: any) {
-          console.warn('[CoverArt] Imagen direct call failed, trying gemini-3.1-flash-image fallback:', imagenErr?.message);
-          try {
-            const resp = await ai.models.generateContent({
-              model: 'gemini-3.1-flash-image',
-              contents: { parts: [{ text: prompt }] },
-            });
-            const candidate = resp.candidates?.[0];
-            const partWithInlineData = candidate?.content?.parts?.find((p: any) => p.inlineData?.data);
-            if (partWithInlineData?.inlineData?.data) {
-              imageBuffer = Buffer.from(partWithInlineData.inlineData.data, 'base64');
-            }
-          } catch (flashErr) {
-            console.warn('[CoverArt] Flash image fallback exception:', flashErr);
-          }
-        }
-      }
-
-      // If Gemini key is not configured or generation failed, generate a clean SVG/PNG local art
-      if (!imageBuffer) {
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
-  <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F86A00"/>
-      <stop offset="50%" stop-color="#FF8800"/>
-      <stop offset="100%" stop-color="#1A1A1E"/>
-    </linearGradient>
-    <radialGradient id="disc" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FFB020" stop-opacity="0.8"/>
-      <stop offset="100%" stop-color="#F86A00" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="800" height="800" fill="url(#g)"/>
-  <circle cx="400" cy="400" r="280" fill="#121214" stroke="#FF8800" stroke-width="4"/>
-  <circle cx="400" cy="400" r="120" fill="url(#disc)"/>
-  <circle cx="400" cy="400" r="40" fill="#FF8800"/>
-  <text x="400" y="320" fill="#FFFFFF" font-family="sans-serif" font-size="36" font-weight="bold" text-anchor="middle">${(title || 'Single').replace(/["'<>]/g, '').slice(0, 30)}</text>
-  <text x="400" y="520" fill="#FFB020" font-family="sans-serif" font-size="24" font-weight="600" text-anchor="middle">${(genre || 'Music').replace(/["'<>]/g, '').toUpperCase()}</text>
-</svg>`;
-        imageBuffer = Buffer.from(svg, 'utf8');
-      }
-
-      const coverJobId = `cover_${Date.now()}`;
-      const coverUrl = await saveGenerationAsset({
-        userId: user.id,
-        jobId: coverJobId,
-        variantIndex: 0,
-        extension: 'png',
-        contentType: 'image/png',
-        data: imageBuffer,
-      });
-
-      return res.json({
-        coverUrl,
-        title: title || 'Single',
-        aspectRatio,
-      });
-    } catch (genErr: any) {
-      await refundCredits({
-        userId: user.id,
-        amount: cost,
-        referenceId: `ref_${refId}`,
-        description: 'Refund for failed cover art generation',
-      }).catch((rErr) => console.error('[CoverArt] Refund failed:', rErr));
-      throw genErr;
-    }
-  } catch (err: any) {
-    console.error('Error generating cover art:', err);
-    return res.status(500).json({ error: err?.message || 'Failed to generate cover art' });
-  }
-});
+// ---------------------------------------------------------------------------
+// AI Cover Art v2 (Multi-Tier, Strict Textless Generation, Sharp Compositor)
+// ---------------------------------------------------------------------------
+registerCoverArtRoutes(app, { resolveUserFromAuthHeader });
 
 // ---------------------------------------------------------------------------
 // Phase 4: Public Models API & Admin Control Plane Routes

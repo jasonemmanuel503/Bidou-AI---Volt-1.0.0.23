@@ -32,6 +32,7 @@ import {
   resolveCatalogModelKey,
 } from '../src/services/providerCatalog';
 import { AiModelConfig, SupplierId } from '../src/types';
+import { COVER_ART_TIERS } from '../src/services/coverArtCatalog';
 
 interface ExpectedScenario {
   modelId: string;
@@ -293,6 +294,53 @@ function runAudit(): void {
   }
 
   console.log('-'.repeat(175));
+
+  // --- 3. Cover Art Tier Price Floor Audit (COVER_ART_PRICE_FLOOR_CHECK) ---
+  console.log('\n--- 3. Cover Art Tier Price Floor Audit (COVER_ART_PRICE_FLOOR_CHECK) ---');
+  console.log('TIER     | ENGINE                | COST/VER (USD) | 2x COST (USD) | FLOOR CR | CHARGED CR | MARGIN @ STUDIO | STATUS');
+  console.log('-'.repeat(105));
+
+  for (const tierId of ['standard', 'pro'] as const) {
+    const tier = COVER_ART_TIERS[tierId];
+    const totalProviderCostUsd = tier.optionsCount * tier.providerCostUsdPerVersion;
+    const computedFloor = computeCreditCost(totalProviderCostUsd, 'image');
+    const charged = tier.creditCost;
+    const floorOk = charged >= computedFloor.creditCost;
+
+    const studioMargin = computeMarginPercentOnPack(
+      totalProviderCostUsd,
+      { generation_type: 'image' } as any,
+      charged,
+      studioPack.price_fcfa,
+      studioPack.credits
+    );
+
+    const statusStr = floorOk ? 'PASS' : 'FAIL';
+    if (!floorOk) {
+      hasFailures = true;
+      console.error(
+        `  -> FAIL reason: Cover Art ${tier.name} charged price (${charged}) is below engine floor (${computedFloor.creditCost})`
+      );
+    }
+
+    console.log(
+      `${tier.name.padEnd(8)} | ${tier.engineName.padEnd(21)} | $${tier.providerCostUsdPerVersion.toFixed(3).padStart(12)} | $${totalProviderCostUsd.toFixed(3).padStart(11)} | ${String(computedFloor.creditCost).padStart(8)} | ${String(charged).padStart(10)} | ${studioMargin.marginPct.toFixed(1)}%`.padEnd(95) +
+      ` | ${statusStr}`
+    );
+  }
+
+  // Also verify Standard fallback engine (nb2lite)
+  const nb2LiteCostUsd = 2 * 0.0336;
+  const nb2LiteFloor = computeCreditCost(nb2LiteCostUsd, 'image');
+  const nb2LitePass = COVER_ART_TIERS.standard.creditCost >= nb2LiteFloor.creditCost;
+  console.log(
+    `Standard (nb2lite fallback)       | $0.034        | $${nb2LiteCostUsd.toFixed(3)}       | ${String(nb2LiteFloor.creditCost).padStart(8)} | ${String(COVER_ART_TIERS.standard.creditCost).padStart(10)} | Floor check: ${nb2LitePass ? 'PASS' : 'FAIL'}`
+  );
+  if (!nb2LitePass) {
+    hasFailures = true;
+  }
+  console.log('-'.repeat(105));
+
   if (hasFailures) {
     console.error('\nAUDIT RESULT: FAIL (one or more checks failed)');
     process.exit(1);

@@ -36,6 +36,7 @@ import { toast } from '../../services/toast';
 import { genreOptions, tonalityOptions } from '../../services/musicStyles';
 import { OccasionSelection, getOccasion, getSub } from '../../services/occasions';
 import { OccasionPickerOverlay } from './OccasionPickerOverlay';
+import { CoverArtStudioModal } from './CoverArtStudioModal';
 
 export interface EnhancePromptContext {
   rawPrompt: string;
@@ -66,6 +67,7 @@ export interface TabState {
   videoResolution: '480p' | '720p' | '1080p';
   // music only
   musicTitle: string;
+  artistName: string;
   musicGenre: string;
   musicTonality: string;
   musicLyrics: string;
@@ -136,6 +138,7 @@ export const makeDefaultTabState = (
     videoDuration: defaultDur,
     videoResolution: '720p',
     musicTitle: '',
+    artistName: '',
     musicGenre: 'Makossa',
     musicTonality: 'Celebratory & Energetic',
     musicLyrics: '',
@@ -640,6 +643,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
   const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
   const [isRewritingLyrics, setIsRewritingLyrics] = useState(false);
   const [isGeneratingCover, setIsGeneratingCover] = useState(false);
+  const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
   const [isTrackDetailsOpen, setIsTrackDetailsOpen] = useState(false);
 
   // Live quote cost breakdown driven by server price_table / credit_cost when present, falling back to quoteGenerationCost
@@ -883,18 +887,9 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
     }
   };
 
-  // Handle Cover Art Generation
-  const handleCoverArtClick = async () => {
-    setIsGeneratingCover(true);
-    try {
-      const cover = await onGenerateCoverArt({
-        title: current.musicTitle || 'African Rhythm Single',
-        genre: current.musicGenre,
-      });
-      patchTab({ coverArtUrl: cover });
-    } finally {
-      setIsGeneratingCover(false);
-    }
+  // Handle Cover Art Generation (Opens dedicated Cover Art Studio Modal v2)
+  const handleCoverArtClick = () => {
+    setIsCoverModalOpen(true);
   };
 
   // Handle Submit / Trigger Generation (Section 2.3.5 & 4.3.2 & 5.3.1)
@@ -1353,7 +1348,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
 
             {isTrackDetailsOpen && (
               <div className="flex flex-col gap-3 p-3.5 rounded-2xl glass-panel-subtle border border-[#FF8800]/20 bg-black/5 dark:bg-white/5 animate-fadeIn">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   {/* Song Title */}
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs font-semibold text-[#1A1A1E] dark:text-[#F5F5F7]">
@@ -1364,6 +1359,20 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                       placeholder="e.g. Soleil de Wouri"
                       value={current.musicTitle}
                       onChange={(e) => patchTab({ musicTitle: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl glass-panel text-base sm:text-xs text-[#1A1A1E] dark:text-[#F5F5F7] focus:outline-none focus:ring-1 focus:ring-[#F86A00]"
+                    />
+                  </div>
+
+                  {/* Artist Name */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-[#1A1A1E] dark:text-[#F5F5F7]">
+                      Artist Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Stanley Enow, Libianca"
+                      value={current.artistName || ''}
+                      onChange={(e) => patchTab({ artistName: e.target.value })}
                       className="w-full px-3 py-2 rounded-xl glass-panel text-base sm:text-xs text-[#1A1A1E] dark:text-[#F5F5F7] focus:outline-none focus:ring-1 focus:ring-[#F86A00]"
                     />
                   </div>
@@ -1467,11 +1476,10 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
                   <button
                     type="button"
                     onClick={handleCoverArtClick}
-                    disabled={isGeneratingCover}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass-panel text-xs font-semibold text-[#F86A00] border border-[#FF8800]/30 hover:border-[#FF8800] transition-all cursor-pointer disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass-panel text-xs font-semibold text-[#F86A00] border border-[#FF8800]/30 hover:border-[#FF8800] transition-all cursor-pointer"
                   >
                     <Disc size={13} />
-                    <span>{isGeneratingCover ? 'Generating…' : `Generate Cover Art (${coverArtCost} FCFA)`}</span>
+                    <span>{current.coverArtUrl ? 'Redesign Cover Art' : 'Create Cover Art (from 240 Credits)'}</span>
                   </button>
                 </div>
               </div>
@@ -2459,6 +2467,24 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         currentLanguage={current.musicLanguage || 'English'}
         onClose={() => setIsOccasionModalOpen(false)}
         onApply={handleApplyOccasion}
+      />
+
+      {/* AI Cover Art Studio Modal v2 */}
+      <CoverArtStudioModal
+        isOpen={isCoverModalOpen}
+        onClose={() => setIsCoverModalOpen(false)}
+        trackTitle={current.musicTitle}
+        artistName={current.artistName || ''}
+        genre={current.musicGenre}
+        walletBalance={walletBalance}
+        onCoverSelected={(coverUrl) => {
+          patchTab({ coverArtUrl });
+          toast.success('Album cover art attached to track!');
+        }}
+        onRequireCredits={(required, available) => {
+          setIsCoverModalOpen(false);
+          if (onRequestUpgrade) onRequestUpgrade();
+        }}
       />
     </GradientBorder>
   );
