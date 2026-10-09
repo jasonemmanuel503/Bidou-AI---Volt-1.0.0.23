@@ -5,8 +5,10 @@
  * Shared catalog and configuration for Bidou AI Cover Art v2.
  * Pure data and type definitions safe to bundle for the browser:
  * - Commercial pricing: Standard 240 credits, Pro 500 credits (both deliver 2 versions)
- * - Curated African & global music style presets
- * - Typography fonts & layout definitions
+ * - 8 Curated African & global music style presets:
+ *   Afrobeats Sunset, Amapiano Neon, Makossa Retro, Bikutsi Heritage,
+ *   Gospel Light, Dark Trap, Minimal Pop, Coupé-Décalé Gold.
+ * - Bundled SIL OFL typography fonts with French accent support (Bebas, Anton, Oswald, Montserrat, Playfair, Alex Brush)
  * - Request and response contract interfaces
  *
  * Rule: NO Node APIs, NO process.env.
@@ -55,105 +57,120 @@ export interface CoverArtStyleOption {
 
 export const COVER_ART_STYLES: CoverArtStyleOption[] = [
   {
-    id: 'afrobeats-vibrant',
-    label: 'Afrobeats Vibrant',
+    id: 'afrobeats-sunset',
+    label: 'Afrobeats Sunset',
     genreVibe: 'Afrobeats, Dancehall, Amapiano',
-    description: 'Lagos golden hour warmth, rich saturated sunset tones, electric amber highlights.',
+    description: 'Lagos golden hour warmth, rich saturated amber tones, electric sunlight lens flare.',
     colorPalette: ['#F86A00', '#FFB020', '#121214'],
   },
   {
-    id: 'amapiano-night',
-    label: 'Amapiano Night',
+    id: 'amapiano-neon',
+    label: 'Amapiano Neon',
     genreVibe: 'Amapiano, Deep House, Afro Tech',
-    description: 'Deep club atmospheric glow, velvety indigo shadows, neon magenta and violet accents.',
+    description: 'Atmospheric club night glow, velvety indigo shadows, neon magenta and violet accents.',
     colorPalette: ['#7928CA', '#FF0080', '#0D0E15'],
   },
   {
-    id: 'afrotrap-street',
-    label: 'Afro-Trap & Drill',
-    genreVibe: 'Afro-Trap, Drill, Hip-Hop',
-    description: 'High-contrast monochrome with vivid metallic sheen, gritty street lens flares.',
-    colorPalette: ['#E6E6E6', '#FF8800', '#0A0A0C'],
+    id: 'makossa-retro',
+    label: 'Makossa Retro',
+    genreVibe: 'Makossa, Highlife, Vintage Afrobeat',
+    description: '1970s analog vinyl record sleeve warmth, vintage sepia, textured brass patina.',
+    colorPalette: ['#D97706', '#92400E', '#292524'],
   },
   {
-    id: 'gospel-divine',
-    label: 'Gospel & Worship',
-    genreVibe: 'Gospel, Soul, Acoustic',
+    id: 'bikutsi-heritage',
+    label: 'Bikutsi Heritage',
+    genreVibe: 'Bikutsi, Folk, Traditional Fusion',
+    description: 'Equatorial forest twilight, earthy ochre, sacred red earth, raw organic percussion aura.',
+    colorPalette: ['#B45309', '#78350F', '#1C1917'],
+  },
+  {
+    id: 'gospel-light',
+    label: 'Gospel Light',
+    genreVibe: 'Gospel, Soul, Worship, Acoustic',
     description: 'Radiant atmospheric light beams, warm ivory and gold gradients, ethereal dignity.',
     colorPalette: ['#FFD700', '#FFF8DC', '#1C1917'],
   },
   {
-    id: 'rnb-velvet',
-    label: 'Afro R&B Dusk',
-    genreVibe: 'R&B, Neo-Soul, Kizomba',
-    description: 'Intimate velvet shadows, creamy soft bokeh, warm vintage film grain.',
-    colorPalette: ['#E11D48', '#831843', '#111827'],
+    id: 'dark-trap',
+    label: 'Dark Trap',
+    genreVibe: 'Afro-Trap, Drill, Heavy Bass',
+    description: 'High-contrast monochrome with vivid metallic sheen, gritty street lens flares.',
+    colorPalette: ['#E6E6E6', '#FF8800', '#0A0A0C'],
   },
   {
-    id: 'highlife-vintage',
-    label: 'Highlife Heritage',
-    genreVibe: 'Highlife, Makossa, Coupé-Décalé',
-    description: '1970s analog vinyl cover aesthetics, warm sepia, retro brass and textured patina.',
-    colorPalette: ['#D97706', '#92400E', '#292524'],
-  },
-  {
-    id: 'cinematic-legend',
-    label: 'Cinematic Epic',
-    genreVibe: 'Afro-Fusion, Soundtrack, Folk',
-    description: 'Heroic wide-angle composition, sweeping savannah skyline, dramatic mythic aura.',
-    colorPalette: ['#EA580C', '#C2410C', '#18181B'],
-  },
-  {
-    id: 'minimalist-clean',
-    label: 'Minimalist Luxury',
-    genreVibe: 'Alternative, Afro-House, Pop',
+    id: 'minimal-pop',
+    label: 'Minimal Pop',
+    genreVibe: 'Alternative, Pop, Afro-House',
     description: 'Bold negative space, stark architectural silhouettes, high-fashion editorial styling.',
     colorPalette: ['#FFFFFF', '#52525B', '#09090B'],
+  },
+  {
+    id: 'coupe-decale-gold',
+    label: 'Coupé-Décalé Gold',
+    genreVibe: 'Coupé-Décalé, Afro-Pop, Party',
+    description: 'Abidjan nightlife luxury, gleaming champagne gold, sparkling reflections, VIP energy.',
+    colorPalette: ['#F59E0B', '#FCD34D', '#18181B'],
   },
 ];
 
 export interface CoverArtFontOption {
   id: string;
   name: string;
-  family: string;
+  fontFile: string;
   description: string;
-  category: 'sans' | 'serif' | 'display' | 'mono';
+  category: 'sans' | 'serif' | 'display' | 'script';
 }
 
 export const COVER_ART_FONTS: CoverArtFontOption[] = [
   {
-    id: 'urban-bold',
-    name: 'Urban Bold',
-    family: 'Liberation Sans, system-ui, sans-serif',
-    description: 'Heavy, impactful uppercase typography for high energy tracks.',
+    id: 'bebas',
+    name: 'Bebas Neue',
+    fontFile: 'BebasNeue-Regular.ttf',
+    description: 'Iconic tall all-caps display sans with powerful punch.',
+    category: 'display',
+  },
+  {
+    id: 'anton',
+    name: 'Anton',
+    fontFile: 'Anton-Regular.ttf',
+    description: 'Heavy condensed grotesque with massive impact.',
+    category: 'display',
+  },
+  {
+    id: 'oswald',
+    name: 'Oswald',
+    fontFile: 'Oswald.ttf',
+    description: 'Balanced modern condensed Gothic sans.',
     category: 'sans',
   },
   {
-    id: 'editorial-serif',
-    name: 'Editorial Serif',
-    family: 'Liberation Serif, Georgia, serif',
-    description: 'Refined, prestigious serif styling for soulful and classic records.',
+    id: 'montserrat',
+    name: 'Montserrat ExtraBold',
+    fontFile: 'Montserrat.ttf',
+    description: 'Clean, geometric, contemporary modern aesthetic.',
+    category: 'sans',
+  },
+  {
+    id: 'playfair',
+    name: 'Playfair Display',
+    fontFile: 'PlayfairDisplay.ttf',
+    description: 'Prestigious high-contrast serif for soulful classic records.',
     category: 'serif',
   },
   {
-    id: 'modern-grotesk',
-    name: 'Modern Grotesk',
-    family: 'FreeSans, Arial, sans-serif',
-    description: 'Clean, balanced, contemporary geometric aesthetic.',
-    category: 'sans',
-  },
-  {
-    id: 'heritage-mono',
-    name: 'Heritage Mono',
-    family: 'FreeMono, monospace',
-    description: 'Industrial, raw vinyl stamp aesthetic with retro spacing.',
-    category: 'mono',
+    id: 'alexbrush',
+    name: 'Alex Brush',
+    fontFile: 'AlexBrush-Regular.ttf',
+    description: 'Elegant flowing script for artist accents.',
+    category: 'script',
   },
 ];
 
 export interface CoverArtLayoutOption {
   id: string;
   name: string;
+  textZone: 'bottom' | 'top';
   description: string;
 }
 
@@ -161,22 +178,26 @@ export const COVER_ART_LAYOUTS: CoverArtLayoutOption[] = [
   {
     id: 'bottom-centered',
     name: 'Bottom Centered',
+    textZone: 'bottom',
     description: 'Title and artist centered at bottom with protective dark gradient scrim.',
   },
   {
     id: 'bottom-left',
     name: 'Bottom Left',
+    textZone: 'bottom',
     description: 'Left-aligned title and artist stacked neatly at the bottom edge.',
   },
   {
     id: 'top-bottom-split',
     name: 'Top / Bottom Split',
+    textZone: 'bottom', // primary title at bottom, artist at top
     description: 'Artist name at top header, song title commanding the bottom scrim.',
   },
   {
-    id: 'center-framed',
-    name: 'Center Framed',
-    description: 'Centralized title presentation with subtle ambient scrim contrast.',
+    id: 'top-header',
+    name: 'Top Header',
+    textZone: 'top',
+    description: 'Title and artist positioned at top margin over protective top scrim.',
   },
 ];
 
@@ -190,6 +211,7 @@ export interface CoverArtVersionDto {
 
 export interface CoverArtJobDto {
   id: string;
+  idempotencyKey?: string;
   status: 'queued' | 'processing' | 'completed' | 'failed';
   tier: CoverArtTierId;
   title: string;
@@ -203,6 +225,8 @@ export interface CoverArtJobDto {
   selectedVersionIndex: number | null;
   selectedCoverUrl: string | null;
   errorMessage?: string;
+  errorCode?: string;
+  partialRefund?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -220,10 +244,12 @@ export interface CreateCoverArtRequest {
   title: string;
   artistName?: string;
   genre?: string;
+  tonality?: string;
   tier: CoverArtTierId;
   styleId: string;
   fontId?: string;
   layoutId?: string;
+  idempotencyKey?: string;
   photoDataUrl?: string | null;
   photoConsent?: boolean;
 }

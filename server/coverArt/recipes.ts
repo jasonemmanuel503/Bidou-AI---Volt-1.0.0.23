@@ -3,113 +3,230 @@
  *
  * Plain-language summary:
  * Style Library recipes for AI Cover Art v2.
- * Server-only art direction guidelines that drive the Gemini Art Director step.
- * Instructs the image model to produce TEXTLESS, high-fidelity artwork
- * with appropriate lighting, cultural authenticity, composition, and negative space
- * specifically allocated for sharp typography compositing.
+ * Each recipe specifies:
+ * - id, label
+ * - artDirection: evocative wording for the Gemini art director
+ * - palette: hex color palette
+ * - composition: textZone ('bottom' | 'top') and framing instructions
+ * - typography: fontId, case, tracking, align, titleToArtistRatio
+ * - optional styleRefs: paths under server/coverArt/style-refs/
+ *
+ * Shipped recipes (Section 5.1):
+ * 1. Afrobeats Sunset
+ * 2. Amapiano Neon
+ * 3. Makossa Retro
+ * 4. Bikutsi Heritage
+ * 5. Gospel Light
+ * 6. Dark Trap
+ * 7. Minimal Pop
+ * 8. Coupé-Décalé Gold
  */
+
+import fs from 'fs';
+import path from 'path';
+
+export interface StyleRecipeComposition {
+  textZone: 'bottom' | 'top';
+  framingNotes: string;
+}
+
+export interface StyleRecipeTypography {
+  fontId: 'bebas' | 'anton' | 'oswald' | 'montserrat' | 'playfair' | 'alexbrush';
+  case: 'uppercase' | 'titlecase';
+  tracking: number; // letter-spacing in pixels
+  align: 'center' | 'left' | 'right';
+  titleToArtistRatio: number; // e.g. 2.2
+}
 
 export interface StyleRecipe {
   id: string;
-  name: string;
-  vibe: string;
-  lightingAndAtmosphere: string;
-  colorPaletteDescription: string;
-  cameraAndFraming: string;
-  negativeSpaceInstruction: string;
-  negativePrompt: string;
+  label: string;
+  artDirection: string;
+  palette: string[];
+  composition: StyleRecipeComposition;
+  typography: StyleRecipeTypography;
+  styleRefs: string[];
 }
 
 export const STYLE_RECIPES: Record<string, StyleRecipe> = {
-  'afrobeats-vibrant': {
-    id: 'afrobeats-vibrant',
-    name: 'Afrobeats Vibrant',
-    vibe: 'Celebratory, sun-drenched Lagos golden hour, high-energy modern African luxury, rich cultural pride.',
-    lightingAndAtmosphere: 'Warm golden backlight, volumetric sunlight through tropical palm leaves or cityscape, amber lens flares, saturated glowing skin tones.',
-    colorPaletteDescription: 'Deep warm amber, sunset orange (#F86A00), electric marigold (#FFB020), rich obsidian shadows.',
-    cameraAndFraming: 'Medium close-up or dynamic low-angle portrait, 35mm cinematic lens, soft bokeh in background, crisp focal subject.',
-    negativeSpaceInstruction: 'Keep the bottom third of the frame darker and relatively uncluttered so bold album title and artist text remain perfectly legible.',
-    negativePrompt: 'text, watermark, typography, letters, font, logo, signature, low-resolution, blurry, oversaturated plastic skin, distorted anatomy, extra fingers, cartoonish',
+  'afrobeats-sunset': {
+    id: 'afrobeats-sunset',
+    label: 'Afrobeats Sunset',
+    artDirection: 'Warm golden hour sunlight over Lagos coastal horizon, vibrant African elegance, saturated amber backlight, subtle tropical haze, deep velvet shadows, celebratory and charismatic.',
+    palette: ['#F86A00', '#FFB020', '#121214'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Medium 3/4 portrait or central hero subject with expansive warm sky above and calm darker ground at the bottom.',
+    },
+    typography: {
+      fontId: 'bebas',
+      case: 'uppercase',
+      tracking: 3,
+      align: 'center',
+      titleToArtistRatio: 2.2,
+    },
+    styleRefs: [],
   },
 
-  'amapiano-night': {
-    id: 'amapiano-night',
-    name: 'Amapiano Night',
-    vibe: 'Moody Johannesburg underground club culture, hypnotic bass rhythm, stylish nightlife, atmospheric glow.',
-    lightingAndAtmosphere: 'Subtle neon magenta, deep violet ambient wash, dramatic rim lighting, soft smoke haze, moody reflections on dark metallic surfaces.',
-    colorPaletteDescription: 'Electric violet, deep indigo, neon pink (#FF0080), rich velvety midnight black.',
-    cameraAndFraming: 'Cinematic portrait with shallow depth of field, anamorphic lens flares, moody club lighting.',
-    negativeSpaceInstruction: 'Ensure dark atmospheric falloff at the bottom edge for luminous typography.',
-    negativePrompt: 'text, watermark, typography, letters, banner, low contrast, daytime, washed out colors, generic stock photo',
+  'amapiano-neon': {
+    id: 'amapiano-neon',
+    label: 'Amapiano Neon',
+    artDirection: 'Deep Johannesburg nightlife ambiance, volumetric neon magenta and violet lighting, glossy reflective surfaces, atmospheric club smoke haze, moody cinematic contrast.',
+    palette: ['#7928CA', '#FF0080', '#0D0E15'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Close portrait with intense rim light and shallow depth of field; deep indigo shadow across the bottom third.',
+    },
+    typography: {
+      fontId: 'anton',
+      case: 'uppercase',
+      tracking: 2,
+      align: 'center',
+      titleToArtistRatio: 2.4,
+    },
+    styleRefs: [],
   },
 
-  'afrotrap-street': {
-    id: 'afrotrap-street',
-    name: 'Afro-Trap & Drill',
-    vibe: 'Gritty urban street style, heavy metallic bass aesthetic, high-fashion streetwear, fierce and confident.',
-    lightingAndAtmosphere: 'High-contrast studio strobe lighting, hard rim highlights, moody streetlights reflecting on wet asphalt, subtle silver chrome highlights.',
-    colorPaletteDescription: 'Monochromatic slate, graphite black, harsh white highlights with sharp neon orange accents.',
-    cameraAndFraming: 'Intense wide-angle portrait from a slightly low angle, high sharpness, architectural urban background.',
-    negativeSpaceInstruction: 'Reserve clean shadowed negative space at the bottom or top for typography.',
-    negativePrompt: 'text, watermark, writing, letters, weak contrast, soft pastel colors, cartoon, blurry, deformed hands',
+  'makossa-retro': {
+    id: 'makossa-retro',
+    label: 'Makossa Retro',
+    artDirection: '1970s West African vinyl record sleeve aesthetic, warm Kodachrome film grain, analog color saturation, vintage brass instruments patina, nostalgic Douala groove.',
+    palette: ['#D97706', '#92400E', '#292524'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Square album crop, authentic period-accurate styling, balanced warm vignette with clean lower margin.',
+    },
+    typography: {
+      fontId: 'oswald',
+      case: 'uppercase',
+      tracking: 2,
+      align: 'center',
+      titleToArtistRatio: 2.0,
+    },
+    styleRefs: [],
   },
 
-  'gospel-divine': {
-    id: 'gospel-divine',
-    name: 'Gospel & Worship',
-    vibe: 'Sacred majesty, spiritual uplift, gratitude, serene devotion, ethereal grace.',
-    lightingAndAtmosphere: 'Soft divine volumetric light shafts streaming from above, golden atmospheric haze, gentle warm rim light, luminous glowing aura.',
-    colorPaletteDescription: 'Pure ivory, radiant gold, warm sandstone, deep mahogany, peaceful celestial white.',
-    cameraAndFraming: 'Heroic upward angle or serene contemplative portrait, soft focus background, dignified posture.',
-    negativeSpaceInstruction: 'Smooth, soft gradient at the bottom for elegant serif typography.',
-    negativePrompt: 'text, words, logo, watermark, dark sinister mood, horror, violent, chaotic, blurry, cartoon',
+  'bikutsi-heritage': {
+    id: 'bikutsi-heritage',
+    label: 'Bikutsi Heritage',
+    artDirection: 'Equatorial Cameroon forest twilight, rich red clay soil, raw organic wood textures, atmospheric mist through dense canopy, majestic cultural dignity.',
+    palette: ['#B45309', '#78350F', '#1C1917'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Ground-level low angle or centered majestic portrait with shaded lower foreground.',
+    },
+    typography: {
+      fontId: 'montserrat',
+      case: 'uppercase',
+      tracking: 4,
+      align: 'center',
+      titleToArtistRatio: 2.1,
+    },
+    styleRefs: [],
   },
 
-  'rnb-velvet': {
-    id: 'rnb-velvet',
-    name: 'Afro R&B Dusk',
-    vibe: 'Sensual intimacy, midnight romance, smooth silk and velvet textures, nostalgic soul.',
-    lightingAndAtmosphere: 'Warm tungsten candle glow, deep burgundy and rose ambient shadows, creamy bokeh spheres, soft analog film grain.',
-    colorPaletteDescription: 'Burgundy velvet, rose dusk, deep espresso, warm champagne highlights.',
-    cameraAndFraming: 'Close-up portrait or evocative mood shot, 85mm portrait lens, ultra-shallow depth of field.',
-    negativeSpaceInstruction: 'Deep shadows along the bottom margin for clean typography overlay.',
-    negativePrompt: 'text, words, title, font, harsh sunlight, cartoon, neon clutter, low quality, noise artifacts',
+  'gospel-light': {
+    id: 'gospel-light',
+    label: 'Gospel Light',
+    artDirection: 'Radiant atmospheric light shafts streaming through soft clouds, warm ivory and celestial gold highlights, peaceful reverence, pure emotional uplift.',
+    palette: ['#FFD700', '#FFF8DC', '#1C1917'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Upward gazing portrait or serene figure illuminated by heavenly downlight; soft dark falloff at the bottom.',
+    },
+    typography: {
+      fontId: 'playfair',
+      case: 'titlecase',
+      tracking: 1,
+      align: 'center',
+      titleToArtistRatio: 2.3,
+    },
+    styleRefs: [],
   },
 
-  'highlife-vintage': {
-    id: 'highlife-vintage',
-    name: 'Highlife Heritage',
-    vibe: '1970s West African vinyl record sleeve nostalgia, timeless brass instruments, authentic vintage analog warmth.',
-    lightingAndAtmosphere: 'Warm kodachrome analog film lighting, natural sunlight through lace curtains, subtle film dust, nostalgic yellow-amber tint.',
-    colorPaletteDescription: 'Rich mustard yellow, burnt sienna, retro olive green, aged vinyl cardboard sepia.',
-    cameraAndFraming: 'Classic vintage medium shot, square album framing, authentic period-accurate African fashion and props.',
-    negativeSpaceInstruction: 'Aged textured borders with clear bottom region for retro album lettering.',
-    negativePrompt: 'modern digital artifacts, 3D render, futuristic neon, text, letters, watermarks, bad anatomy',
+  'dark-trap': {
+    id: 'dark-trap',
+    label: 'Dark Trap',
+    artDirection: 'High-contrast monochrome with hard strobe lighting, wet asphalt reflections, harsh silver chrome accents, intense aggressive stare, gritty urban textures.',
+    palette: ['#E6E6E6', '#FF8800', '#0A0A0C'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Direct frontal close-up with wide-angle perspective distortion and deep pitch-black base.',
+    },
+    typography: {
+      fontId: 'anton',
+      case: 'uppercase',
+      tracking: 3,
+      align: 'center',
+      titleToArtistRatio: 2.5,
+    },
+    styleRefs: [],
   },
 
-  'cinematic-legend': {
-    id: 'cinematic-legend',
-    name: 'Cinematic Epic',
-    vibe: 'Epic African folklore, majestic savannah sunsets, legendary hero posture, cinematic motion picture scale.',
-    lightingAndAtmosphere: 'Dramatic twilight rim light, glowing embers or dust motes, towering storm clouds illuminated by crimson sun.',
-    colorPaletteDescription: 'Deep crimson, burnt orange, golden savannah straw, deep obsidian charcoal.',
-    cameraAndFraming: 'Wide cinematic scale, majestic posture, epic horizon background, anamorphic widescreen feel.',
-    negativeSpaceInstruction: 'Deep silhouette baseline with spacious gradient for cinematic title styling.',
-    negativePrompt: 'text, title, font, words, logo, modern cars, modern clothes, blur, distorted faces',
+  'minimal-pop': {
+    id: 'minimal-pop',
+    label: 'Minimal Pop',
+    artDirection: 'Bold negative space, stark architectural concrete and clean lines, high-fashion editorial styling, soft diffused daylight, sophisticated restraint.',
+    palette: ['#FFFFFF', '#52525B', '#09090B'],
+    composition: {
+      textZone: 'top',
+      framingNotes: 'Asymmetrical silhouette positioned in the lower half, leaving a vast clean upper third for typography.',
+    },
+    typography: {
+      fontId: 'montserrat',
+      case: 'uppercase',
+      tracking: 6,
+      align: 'center',
+      titleToArtistRatio: 1.9,
+    },
+    styleRefs: [],
   },
 
-  'minimalist-clean': {
-    id: 'minimalist-clean',
-    name: 'Minimalist Luxury',
-    vibe: 'High-end African luxury, editorial magazine cover, architectural geometry, sophisticated negative space.',
-    lightingAndAtmosphere: 'Clean directional gallery studio lighting, soft sculpted shadows, pristine highlights.',
-    colorPaletteDescription: 'Pure monochrome with single muted accent (warm ochre or brushed bronze).',
-    cameraAndFraming: 'Strong geometric silhouette, balanced asymmetrical composition, stark minimalism.',
-    negativeSpaceInstruction: 'Vast, intentional negative space across the lower half specifically framed for editorial typography.',
-    negativePrompt: 'clutter, busy background, text, letters, writing, watermark, messy composition, low resolution',
+  'coupe-decale-gold': {
+    id: 'coupe-decale-gold',
+    label: 'Coupé-Décalé Gold',
+    artDirection: 'Glamorous Abidjan VIP nightlife, glittering champagne sparkles, glossy black leather and fine jewelry, radiant golden spotlights, exuberant luxury.',
+    palette: ['#F59E0B', '#FCD34D', '#18181B'],
+    composition: {
+      textZone: 'bottom',
+      framingNotes: 'Heroic waist-up portrait surrounded by golden lens flares with dark shadowed bottom border.',
+    },
+    typography: {
+      fontId: 'bebas',
+      case: 'uppercase',
+      tracking: 3,
+      align: 'center',
+      titleToArtistRatio: 2.2,
+    },
+    styleRefs: [],
   },
 };
 
 export function getRecipe(styleId: string): StyleRecipe {
-  return STYLE_RECIPES[styleId] || STYLE_RECIPES['afrobeats-vibrant'];
+  return STYLE_RECIPES[styleId] || STYLE_RECIPES['afrobeats-sunset'];
+}
+
+/**
+ * Resolves up to two cleared style reference image paths for a recipe.
+ */
+export function getRecipeStyleRefBuffers(recipe: StyleRecipe): { buffer: Buffer; mime: string }[] {
+  const result: { buffer: Buffer; mime: string }[] = [];
+  const baseDir = process.env.COVER_ASSETS_DIR
+    ? path.join(process.env.COVER_ASSETS_DIR, 'style-refs')
+    : path.resolve(process.cwd(), 'server', 'coverArt', 'style-refs');
+
+  for (const refPath of recipe.styleRefs.slice(0, 2)) {
+    const fullPath = path.isAbsolute(refPath) ? refPath : path.join(baseDir, refPath);
+    if (fs.existsSync(fullPath)) {
+      try {
+        const buf = fs.readFileSync(fullPath);
+        const mime = fullPath.endsWith('.png') ? 'image/png' : 'image/jpeg';
+        result.push({ buffer: buf, mime });
+      } catch (err: any) {
+        console.warn(`[CoverArt Recipes] Could not read style ref ${fullPath}:`, err?.message);
+      }
+    }
+  }
+
+  return result;
 }

@@ -2,145 +2,154 @@
  * server/coverArt/fonts.ts
  *
  * Plain-language summary:
- * Bundled OFL font loader and typography renderer for Cover Art v2.
- * - Loads bundled font files from `server/coverArt/fonts/`
- * - Base64-encodes font files for embedded SVG `@font-face` rules (guaranteeing exact rendering in sharp/librsvg)
- * - Performs a boot self-test on server start to guarantee font rendering works
+ * Bundled OFL font manager for AI Cover Art v2:
+ * - Manages SIL Open Font License files in server/coverArt/fonts/
+ * - Resolves font paths relative to COVER_ASSETS_DIR with sensible defaults
+ * - Executes boot self-test rendering French accented glyphs ('Aa Éé ç ô û ï œ') with each font
+ * - Exposes getFontFilePath(fontId) for sharp({ text: { ... fontfile } }) Pango rendering
  */
 
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
+import { isLiveMode } from '../config/mode';
 
-export interface BundledFontDefinition {
-  id: string;
-  family: string;
+export type CoverFontId = 'bebas' | 'anton' | 'oswald' | 'montserrat' | 'playfair' | 'alexbrush';
+
+export interface FontEntry {
+  id: CoverFontId;
+  name: string;
   fileName: string;
-  weight: string;
-  style: string;
+  path: string;
+  verified: boolean;
 }
 
-const FONT_DEFINITIONS: BundledFontDefinition[] = [
-  {
-    id: 'urban-bold',
-    family: 'UrbanBoldFont',
-    fileName: 'LiberationSans-Bold.ttf',
-    weight: 'bold',
-    style: 'normal',
-  },
-  {
-    id: 'editorial-serif',
-    family: 'EditorialSerifFont',
-    fileName: 'LiberationSerif-Bold.ttf',
-    weight: 'bold',
-    style: 'normal',
-  },
-  {
-    id: 'modern-grotesk',
-    family: 'ModernGroteskFont',
-    fileName: 'FreeSansBold.ttf',
-    weight: 'bold',
-    style: 'normal',
-  },
-  {
-    id: 'heritage-mono',
-    family: 'HeritageMonoFont',
-    fileName: 'FreeMonoBold.ttf',
-    weight: 'bold',
-    style: 'normal',
-  },
-];
+const FONT_MAP: Record<CoverFontId, { name: string; fileName: string }> = {
+  bebas: { name: 'Bebas Neue', fileName: 'BebasNeue-Regular.ttf' },
+  anton: { name: 'Anton', fileName: 'Anton-Regular.ttf' },
+  oswald: { name: 'Oswald', fileName: 'Oswald.ttf' },
+  montserrat: { name: 'Montserrat ExtraBold', fileName: 'Montserrat.ttf' },
+  playfair: { name: 'Playfair Display', fileName: 'PlayfairDisplay.ttf' },
+  alexbrush: { name: 'Alex Brush', fileName: 'AlexBrush-Regular.ttf' },
+};
 
-const fontBase64Cache = new Map<string, string>();
-let isSelfTested = false;
+let fontDirectory: string = '';
+let areFontsOperational = false;
+const loadedFontPaths = new Map<CoverFontId, string>();
 
-function resolveFontDir(): string {
-  // Support both development (tsx server.ts) and bundled dist/server.cjs
-  const localDir = path.resolve(__dirname, 'fonts');
-  if (fs.existsSync(localDir)) return localDir;
-
-  const projectDir = path.resolve(process.cwd(), 'server', 'coverArt', 'fonts');
-  if (fs.existsSync(projectDir)) return projectDir;
-
-  return '/usr/share/fonts/truetype/liberation';
-}
-
-export function loadBundledFonts(): void {
-  const fontDir = resolveFontDir();
-
-  for (const def of FONT_DEFINITIONS) {
-    let filePath = path.join(fontDir, def.fileName);
-    if (!fs.existsSync(filePath)) {
-      // Fallback to system locations if run in an unusual path
-      if (def.id === 'urban-bold') filePath = '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf';
-      else if (def.id === 'editorial-serif') filePath = '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf';
-      else if (def.id === 'modern-grotesk') filePath = '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf';
-      else if (def.id === 'heritage-mono') filePath = '/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf';
-    }
-
-    if (fs.existsSync(filePath)) {
-      try {
-        const buffer = fs.readFileSync(filePath);
-        fontBase64Cache.set(def.id, buffer.toString('base64'));
-      } catch (err: any) {
-        console.warn(`[CoverArt Fonts] Could not read font file ${filePath}:`, err?.message);
-      }
-    }
-  }
-}
-
-export function getFontFamilyForId(fontId: string): string {
-  const def = FONT_DEFINITIONS.find((f) => f.id === fontId);
-  return def ? def.family : 'UrbanBoldFont';
-}
-
-export function buildSvgFontStyles(): string {
-  if (fontBase64Cache.size === 0) {
-    loadBundledFonts();
+export function resolveFontsDirectory(): string {
+  if (fontDirectory && fs.existsSync(fontDirectory)) {
+    return fontDirectory;
   }
 
-  const cssRules: string[] = [];
-  for (const def of FONT_DEFINITIONS) {
-    const b64 = fontBase64Cache.get(def.id);
-    if (b64) {
-      cssRules.push(`
-        @font-face {
-          font-family: '${def.family}';
-          src: url('data:font/truetype;charset=utf-8;base64,${b64}') format('truetype');
-          font-weight: ${def.weight};
-          font-style: ${def.style};
-        }
-      `);
+  const envDir = process.env.COVER_ASSETS_DIR;
+  if (envDir && fs.existsSync(envDir)) {
+    const sub = path.join(envDir, 'fonts');
+    if (fs.existsSync(sub)) {
+      fontDirectory = sub;
+      return fontDirectory;
     }
+    fontDirectory = envDir;
+    return fontDirectory;
   }
 
-  return cssRules.join('\n');
+  const distFonts = path.resolve(process.cwd(), 'dist', 'fonts');
+  if (fs.existsSync(distFonts)) {
+    fontDirectory = distFonts;
+    return fontDirectory;
+  }
+
+  const projectFonts = path.resolve(process.cwd(), 'server', 'coverArt', 'fonts');
+  if (fs.existsSync(projectFonts)) {
+    fontDirectory = projectFonts;
+    return fontDirectory;
+  }
+
+  const localFonts = path.resolve(__dirname, 'fonts');
+  if (fs.existsSync(localFonts)) {
+    fontDirectory = localFonts;
+    return fontDirectory;
+  }
+
+  fontDirectory = projectFonts;
+  return fontDirectory;
+}
+
+export function getFontFilePath(fontId: string): string {
+  const normalized = (fontId || 'bebas').toLowerCase() as CoverFontId;
+  const mapped = loadedFontPaths.get(normalized) || loadedFontPaths.get('bebas');
+  if (mapped && fs.existsSync(mapped)) return mapped;
+
+  const fontDir = resolveFontsDirectory();
+  const def = FONT_MAP[normalized] || FONT_MAP.bebas;
+  return path.join(fontDir, def.fileName);
+}
+
+export function areFontsReady(): boolean {
+  return areFontsOperational;
 }
 
 /**
- * Boot self-test: renders a small test SVG through sharp to verify font rasterization.
+ * Boot Self-Test:
+ * Renders 'Aa Éé ç ô û ï œ' with each bundled font file through sharp/Pango.
+ * In live mode, fails loudly if any font is missing or fails rasterization.
  */
 export async function runFontBootSelfTest(): Promise<boolean> {
-  if (isSelfTested) return true;
-  try {
-    loadBundledFonts();
-    const fontCss = buildSvgFontStyles();
-    const testSvg = `<svg width="200" height="80" xmlns="http://www.w3.org/2000/svg">
-      <defs><style>${fontCss}</style></defs>
-      <rect width="200" height="80" fill="#000000"/>
-      <text x="100" y="50" font-family="UrbanBoldFont, sans-serif" font-size="24" fill="#ffffff" font-weight="bold" text-anchor="middle">BIDOU</text>
-    </svg>`;
+  const fontDir = resolveFontsDirectory();
+  const fontIds = Object.keys(FONT_MAP) as CoverFontId[];
+  const testPhrase = '<span foreground="white">Aa Éé ç ô û ï œ</span>';
+  let allPassed = true;
 
-    const buf = await sharp(Buffer.from(testSvg)).png().toBuffer();
-    if (buf && buf.length > 500) {
-      isSelfTested = true;
-      console.log(`[CoverArt Fonts] Boot self-test PASSED (rasterized test cover banner, ${buf.length} bytes, ${fontBase64Cache.size} bundled fonts loaded)`);
-      return true;
+  for (const fId of fontIds) {
+    const def = FONT_MAP[fId];
+    const fullPath = path.join(fontDir, def.fileName);
+
+    if (!fs.existsSync(fullPath)) {
+      console.error(`[CoverArt Fonts] CRITICAL: Missing font file for ${def.name} at ${fullPath}`);
+      allPassed = false;
+      continue;
     }
-    console.warn('[CoverArt Fonts] Boot self-test yielded undersized buffer');
-    return false;
-  } catch (err: any) {
-    console.error('[CoverArt Fonts] Boot self-test FAILED:', err?.message);
+
+    try {
+      const buf = await sharp({
+        text: {
+          text: testPhrase,
+          fontfile: fullPath,
+          rgba: true,
+        },
+      })
+        .png()
+        .toBuffer();
+
+      if (buf && buf.length > 200) {
+        loadedFontPaths.set(fId, fullPath);
+      } else {
+        console.error(`[CoverArt Fonts] CRITICAL: Render of ${def.name} produced undersized output`);
+        allPassed = false;
+      }
+    } catch (err: any) {
+      console.error(`[CoverArt Fonts] CRITICAL: Boot self-test failed for font ${def.name}:`, err?.message);
+      allPassed = false;
+    }
+  }
+
+  if (allPassed) {
+    areFontsOperational = true;
+    console.log(
+      `[CoverArt Fonts] Boot self-test PASSED: All 6 OFL fonts verified with French accents in ${fontDir}`
+    );
+    return true;
+  }
+
+  if (isLiveMode()) {
+    console.error(
+      '[CoverArt Fonts] FATAL IN LIVE MODE: One or more fonts failed boot self-test. Disabling Cover Art feature (503).'
+    );
+    areFontsOperational = false;
     return false;
   }
+
+  // In demo/dev mode, permit operation if at least 1 font loaded
+  areFontsOperational = loadedFontPaths.size > 0;
+  return areFontsOperational;
 }

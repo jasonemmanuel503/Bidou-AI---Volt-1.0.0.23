@@ -157,7 +157,11 @@ export function supplierSupportsRequest(supplier: SupplierId, params: Capability
 
   switch (supplier) {
     case 'cloudflare':
-      return modelId === 'img_cf_flux1_schnell' || modelId === 'img_cf_flux2_klein_4b';
+      return (
+        modelId === 'img_cf_flux1_schnell' ||
+        modelId === 'img_cf_flux2_klein_4b' ||
+        modelId === 'img_cf_flux2_klein_9b'
+      );
 
     case 'kie': {
       // Confirmed in docs.kie.ai/veo3-api: Kie Veo 3.1 generates 8s clips in 16:9 or 9:16 (720p default + 1080p endpoint).

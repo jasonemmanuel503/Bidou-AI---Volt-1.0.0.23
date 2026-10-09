@@ -32,12 +32,23 @@ import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function supports(params: CapabilityCheckParams): boolean {
-  return params.modelId === 'img_cf_flux1_schnell' || params.modelId === 'img_cf_flux2_klein_4b';
+  return (
+    params.modelId === 'img_cf_flux1_schnell' ||
+    params.modelId === 'img_cf_flux2_klein_4b' ||
+    params.modelId === 'img_cf_flux2_klein_9b'
+  );
 }
 
 registerSupplierCapability('cloudflare', supports);
 
 export function resolveCloudflareUpstreamModel(modelIdOrName: string): string {
+  if (
+    modelIdOrName === 'img_cf_flux2_klein_9b' ||
+    modelIdOrName === 'cf_flux2_klein_9b' ||
+    modelIdOrName.includes('flux-2-klein-9b')
+  ) {
+    return '@cf/black-forest-labs/flux-2-klein-9b';
+  }
   if (
     modelIdOrName === 'img_cf_flux2_klein_4b' ||
     modelIdOrName === 'cf_flux2_klein_4b' ||
@@ -69,13 +80,21 @@ export function getDimensionsForAspectRatio(
 /**
  * Computes the Cloudflare Workers AI cost in USD from the catalog's PRICE_BOOK
  * (`getActualCostUsd`), scaling by output tile ratio relative to 1024x1024 (4 tiles).
+ * Klein 9B costs 0.015 base MP + 0.002 extra output MP + 0.002 per input MP.
  */
 export function estimateCloudflareImageCostUsd(
   upstreamModel: string,
   width: number = 1024,
   height: number = 1024,
-  _steps: number = 4
+  _steps: number = 4,
+  inputImageCount: number = 0
 ): number {
+  if (upstreamModel.includes('flux-2-klein-9b')) {
+    const outputMp = (width * height) / 1_000_000;
+    const extraOutputMp = Math.max(0, outputMp - 1.0);
+    const cost = 0.015 + extraOutputMp * 0.002 + inputImageCount * 0.002;
+    return Number(cost.toFixed(6));
+  }
   const modelId = upstreamModel.includes('flux-2-klein-4b')
     ? 'img_cf_flux2_klein_4b'
     : 'img_cf_flux1_schnell';
@@ -125,6 +144,7 @@ export async function callCloudflareSingleImage(params: {
   prompt: string;
   aspectRatio?: string;
   abortSignal?: AbortSignal;
+  referenceImages?: { buffer: Buffer; mime: string }[];
 }): Promise<{ buffer: Buffer; extension: 'png' | 'jpg'; contentType: string; estCostUsd: number }> {
   const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
   const apiToken = (process.env.CLOUDFLARE_API_TOKEN || '').trim();
@@ -140,17 +160,26 @@ export async function callCloudflareSingleImage(params: {
   // Truncate prompt to 2048 chars (never fail on long prompt)
   const truncatedPrompt = (params.prompt || '').slice(0, 2048);
   const { width, height } = getDimensionsForAspectRatio(params.upstreamModel, params.aspectRatio);
-  const estCostUsd = estimateCloudflareImageCostUsd(params.upstreamModel, width, height, 4);
+  const refCount = params.referenceImages?.length || 0;
+  const estCostUsd = estimateCloudflareImageCostUsd(params.upstreamModel, width, height, 4, refCount);
 
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${params.upstreamModel}`;
 
   let requestInit: RequestInit;
-  if (params.upstreamModel.includes('flux-2-klein-4b')) {
+  if (params.upstreamModel.includes('flux-2-klein-9b') || params.upstreamModel.includes('flux-2-klein-4b')) {
     const form = new FormData();
     form.append('prompt', truncatedPrompt);
     form.append('steps', '4');
     form.append('width', String(width));
     form.append('height', String(height));
+
+    if (params.referenceImages && params.referenceImages.length > 0) {
+      params.referenceImages.slice(0, 4).forEach((img, idx) => {
+        const blob = new Blob([new Uint8Array(img.buffer)], { type: img.mime || 'image/jpeg' });
+        form.append(`input_image_${idx}`, blob, `input_${idx}.jpg`);
+      });
+    }
+
     requestInit = {
       method: 'POST',
       headers: {

@@ -2478,7 +2478,7 @@ export const UnifiedPromptBox: React.FC<UnifiedPromptBoxProps> = ({
         genre={current.musicGenre}
         walletBalance={walletBalance}
         onCoverSelected={(coverUrl) => {
-          patchTab({ coverArtUrl });
+          patchTab({ coverArtUrl: coverUrl });
           toast.success('Album cover art attached to track!');
         }}
         onRequireCredits={(required, available) => {

@@ -191,15 +191,15 @@ async function generateSingleVersion(params: {
   photoBuffer: Buffer | null;
   photoMime: string;
 }): Promise<{ versionDto: CoverArtVersionDto; textlessBuffer: Buffer }> {
-  const { job, recipe, versionIndex, photoBuffer, photoMime } = params;
+  const { job, request, recipe, versionIndex, photoBuffer, photoMime } = params;
 
   // 1. Art Director prompt step
   const artDirection = await generateArtDirectorPrompt({
     title: job.title,
-    artistName: job.artistName,
     genre: job.genre,
+    tonality: request.tonality,
     recipe,
-    hasReferencePhoto: Boolean(photoBuffer && photoBuffer.length > 0),
+    hasPhoto: Boolean(photoBuffer && photoBuffer.length > 0),
     versionIndex,
   });
 
@@ -213,12 +213,11 @@ async function generateSingleVersion(params: {
     const engineResult = await executeEngineVariant({
       tier: job.tier,
       prompt: activePrompt,
-      negativePrompt: artDirection.negativePrompt,
-      referencePhotoBuffer: photoBuffer,
-      referencePhotoMime: photoMime,
+      artistPhoto: photoBuffer ? { buffer: photoBuffer, mime: photoMime } : null,
       userId: job.userId,
       jobId: job.id,
       versionIndex,
+      retryNumber: retryCount,
     });
 
     engineUsed = engineResult.engineUsed;
@@ -251,6 +250,8 @@ async function generateSingleVersion(params: {
     rawArtworkBuffer,
     title: job.title,
     artistName: job.artistName,
+    textZone: recipe.composition?.textZone,
+    typography: recipe.typography,
     fontId: job.fontId,
     layoutId: job.layoutId,
   });
@@ -262,7 +263,7 @@ async function generateSingleVersion(params: {
     variantIndex: versionIndex, // 0 or 1
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: compositeResult.fullMasterJpeg,
+    data: compositeResult.finalJpeg,
   });
 
   const thumbUrl = await saveGenerationAsset({
@@ -271,7 +272,7 @@ async function generateSingleVersion(params: {
     variantIndex: 10 + versionIndex, // 10 or 11
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: compositeResult.thumbnailJpeg,
+    data: compositeResult.thumbJpeg,
   });
 
   const textlessUrl = await saveGenerationAsset({
@@ -280,7 +281,7 @@ async function generateSingleVersion(params: {
     variantIndex: 100 + versionIndex, // 100 or 101
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: compositeResult.textlessMasterJpeg,
+    data: compositeResult.masterJpeg,
   });
 
   const versionDto: CoverArtVersionDto = {
@@ -293,7 +294,7 @@ async function generateSingleVersion(params: {
 
   return {
     versionDto,
-    textlessBuffer: compositeResult.textlessMasterJpeg,
+    textlessBuffer: compositeResult.masterJpeg,
   };
 }
 
@@ -348,7 +349,7 @@ export async function recompositeCoverArtJob(
     variantIndex: 0,
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: v0Comp.fullMasterJpeg,
+    data: v0Comp.finalJpeg,
   });
 
   const v0ThumbUrl = await saveGenerationAsset({
@@ -357,7 +358,7 @@ export async function recompositeCoverArtJob(
     variantIndex: 10,
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: v0Comp.thumbnailJpeg,
+    data: v0Comp.thumbJpeg,
   });
 
   const v1Url = await saveGenerationAsset({
@@ -366,7 +367,7 @@ export async function recompositeCoverArtJob(
     variantIndex: 1,
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: v1Comp.fullMasterJpeg,
+    data: v1Comp.finalJpeg,
   });
 
   const v1ThumbUrl = await saveGenerationAsset({
@@ -375,7 +376,7 @@ export async function recompositeCoverArtJob(
     variantIndex: 11,
     extension: 'jpg',
     contentType: 'image/jpeg',
-    data: v1Comp.thumbnailJpeg,
+    data: v1Comp.thumbJpeg,
   });
 
   job.versions[0].imageUrl = `${v0Url}?t=${Date.now()}`;

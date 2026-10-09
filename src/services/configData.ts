@@ -82,6 +82,38 @@ export const INITIAL_AI_MODELS: AiModelConfig[] = [
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   },
+  {
+    id: 'img_cf_flux2_klein_9b',
+    provider: 'cloudflare',
+    model_name: 'cf_flux2_klein_9b',
+    display_name: 'Cloudflare FLUX.2 Klein 9B (1K)',
+    generation_type: 'image',
+    pricing_kind: 'per_image',
+    unit: 'per_generation',
+    provider_cost: getPricingCostUsd('img_cf_flux2_klein_9b'),
+    credit_cost: computeCreditCost(getPricingCostUsd('img_cf_flux2_klein_9b'), 'image').creditCost,
+    active: false,
+    quality_tier: 'fast',
+    licensing_verified: false,
+    promo_eligible: true,
+    is_premium: false,
+    max_concurrent_variants: 2,
+    max_upscale: '2k',
+    upscale_credit_cost: 50,
+    supported_aspect_ratios: ['1:1'],
+    suppliers: [
+      {
+        supplier: 'cloudflare',
+        upstream_model: '@cf/black-forest-labs/flux-2-klein-9b',
+        priority: 1,
+        env: 'both',
+        enabled: true,
+      },
+    ],
+    prompt_style_guide: 'FLUX.2 Klein 9B. High-speed 4-step image model supporting input image conditioning and clean textless compositional structure.',
+    created_at: '2026-10-09T00:00:00Z',
+    updated_at: '2026-10-09T00:00:00Z',
+  },
 
   // Image Models (Google)
   {

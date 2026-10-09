@@ -47,6 +47,7 @@ export async function executeImageGeneration(
     ctx.model.provider === 'cloudflare' ||
     ctx.model.id === 'img_cf_flux1_schnell' ||
     ctx.model.id === 'img_cf_flux2_klein_4b' ||
+    ctx.model.id === 'img_cf_flux2_klein_9b' ||
     ctx.model.model_name?.startsWith('cf_flux')
   ) {
     return executeCloudflareImageGeneration(ctx);

@@ -2,13 +2,19 @@
  * server/coverArt/engines.ts
  *
  * Plain-language summary:
- * Engine dispatch for AI Cover Art v2:
- * - Standard Tier: FLUX.2 Klein 9B on Cloudflare Workers AI (`@cf/black-forest-labs/flux-2-klein-9b`),
- *   with fallback to Nano Banana 2 Lite if configured (`COVER_STANDARD_ENGINE=nb2lite`)
- *   or if Klein 9B is not verified for commercial licensing.
+ * Image generation engine dispatch for AI Cover Art v2 (Section 5.3):
+ * - Standard Tier: FLUX.2 Klein 9B on Cloudflare Workers AI (`@cf/black-forest-labs/flux-2-klein-9b`)
+ *   with fallback to Nano Banana 2 Lite if configured or unverified.
  * - Pro Tier: Nano Banana 2 on Google (`gemini-3.1-flash-image` with 1K square output).
- * - Multi-modal reference image input: attaches the artist photo when provided.
- * - Full operational hardening: cost ledger tracking, supplier budget reservations, and health circuit.
+ * - Multi-image conditioning:
+ *   input_image_0 = style ref (if present)
+ *   input_image_1 = artist photo (if present)
+ * - Strict financial safeguards:
+ *   - reserveSupplierBudget before call (simulated in dev on cap_reached; trips fail version)
+ *   - recordAttempt before & markSucceeded/markFailed after (unitLabel: 'image')
+ *   - Provider health metrics and secrets redaction
+ *   - Friendly SAFETY_FILTER code for filtered prompts or photos
+ *   - In live mode: NEVER return a placeholder as real output; honest failure triggers refund.
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -16,9 +22,18 @@ import sharp from 'sharp';
 import { isLiveMode } from '../config/mode';
 import { recordAttempt, markSucceeded, markFailed } from '../costLedger';
 import { recordProviderFailure, recordProviderSuccess } from '../providers/health';
-import { reserveSupplierBudget, withSupplierBudgetMutex, getProviderEnv } from '../providers/suppliers';
+import {
+  reserveSupplierBudget,
+  withSupplierBudgetMutex,
+  fetchWithTimeout,
+  redactSecrets,
+  getProviderEnv,
+} from '../providers/suppliers';
+import { resolveGoogleModelId } from '../providers/routing';
+import { callCloudflareSingleImage } from '../providers/cloudflare';
 import { CoverArtTierId } from '../../src/services/coverArtCatalog';
 import { INITIAL_AI_MODELS } from '../../src/services/configData';
+import { IMAGE_ROUTES } from '../../src/services/providerCatalog';
 
 let geminiClient: GoogleGenAI | null = null;
 function getGemini(): GoogleGenAI | null {
@@ -31,12 +46,12 @@ function getGemini(): GoogleGenAI | null {
 export interface EngineExecutionParams {
   tier: CoverArtTierId;
   prompt: string;
-  negativePrompt?: string;
-  referencePhotoBuffer?: Buffer | null;
-  referencePhotoMime?: string;
+  styleRefs?: { buffer: Buffer; mime: string }[];
+  artistPhoto?: { buffer: Buffer; mime: string } | null;
   userId: string;
   jobId: string;
   versionIndex: number;
+  retryNumber?: number;
 }
 
 export interface EngineExecutionResult {
@@ -45,28 +60,19 @@ export interface EngineExecutionResult {
   engineUsed: string;
   supplier: 'cloudflare' | 'google' | 'mock';
   costUsd: number;
+  isSimulated?: boolean;
 }
 
-/**
- * Checks whether the Standard engine is configured for Klein 9B or NB2Lite,
- * and confirms licensing status.
- */
 export function getEffectiveStandardEngine(): 'klein9b' | 'nb2lite' {
   const envChoice = (process.env.COVER_STANDARD_ENGINE || 'klein9b').toLowerCase().trim();
-  if (envChoice === 'nb2lite') {
-    return 'nb2lite';
-  }
+  if (envChoice === 'nb2lite') return 'nb2lite';
 
-  // Check licensing_verified in model catalog
-  const kleinCatalog = INITIAL_AI_MODELS.find(
-    (m) => m.id === 'img_cf_flux2_klein_4b' || m.model_name === 'cf_flux2_klein_9b'
-  );
-  const licensingOk = kleinCatalog ? kleinCatalog.licensing_verified : true;
+  const kleinModel = INITIAL_AI_MODELS.find((m) => m.id === 'img_cf_flux2_klein_9b');
+  const licensingOk = kleinModel ? kleinModel.licensing_verified : true;
 
   if (!licensingOk && envChoice !== 'klein9b_force') {
     return 'nb2lite';
   }
-
   return 'klein9b';
 }
 
@@ -80,21 +86,36 @@ export function isStandardTierAvailable(): boolean {
   return !isLiveMode() || hasGoogle;
 }
 
+function isSafetyFilterMessage(text: string): boolean {
+  const lower = (text || '').toLowerCase();
+  return (
+    lower.includes('safety') ||
+    lower.includes('blocked') ||
+    lower.includes('filter') ||
+    lower.includes('moderation') ||
+    lower.includes('policy') ||
+    lower.includes('nsfw') ||
+    lower.includes('inappropriate') ||
+    lower.includes('sensitive')
+  );
+}
+
 /**
- * Dispatches image generation for a single cover art variant.
+ * Dispatches a single cover art variant generation to the chosen tier engine.
  */
 export async function executeEngineVariant(
   params: EngineExecutionParams
 ): Promise<EngineExecutionResult> {
-  const { tier, prompt, referencePhotoBuffer, referencePhotoMime, userId, jobId, versionIndex } = params;
+  const { tier } = params;
 
   if (tier === 'standard') {
-    const standardEngine = getEffectiveStandardEngine();
-    if (standardEngine === 'klein9b') {
-      return executeKlein9bVariant(params);
+    const stdEngine = getEffectiveStandardEngine();
+    if (stdEngine === 'klein9b') {
+      return executeCloudflareKlein9b(params);
     }
-    return executeGoogleImageVariant({
+    return executeGoogleCoverCall({
       ...params,
+      googleCatalogId: 'img_nano_banana_2_lite',
       googleModelId: 'gemini-3.1-flash-lite-image',
       estCostUsd: 0.0336,
       engineLabel: 'Nano Banana 2 Lite (Standard Fallback)',
@@ -102,167 +123,194 @@ export async function executeEngineVariant(
   }
 
   // Pro Tier: Nano Banana 2 on Google
-  return executeGoogleImageVariant({
+  return executeGoogleCoverCall({
     ...params,
-    googleModelId: 'gemini-3.1-flash-image',
+    googleCatalogId: 'img_nano_banana_2',
+    googleModelId: IMAGE_ROUTES.nano_banana_2.googleModelId || 'gemini-3.1-flash-image',
     estCostUsd: 0.067,
     engineLabel: 'Nano Banana 2 (Pro)',
   });
 }
 
 /**
- * Executes standard tier on Cloudflare Workers AI FLUX.2 Klein 9B.
+ * Standard Tier: FLUX.2 Klein 9B on Cloudflare Workers AI.
  */
-async function executeKlein9bVariant(
+async function executeCloudflareKlein9b(
   params: EngineExecutionParams
 ): Promise<EngineExecutionResult> {
-  const { prompt, referencePhotoBuffer, userId, jobId, versionIndex } = params;
+  const { prompt, styleRefs = [], artistPhoto, userId, jobId, versionIndex, retryNumber = 0 } = params;
   const upstreamModel = '@cf/black-forest-labs/flux-2-klein-9b';
-  const estCostUsd = 0.019;
-  const attemptRef = `${jobId}_v${versionIndex}_cf`;
+  const inputImagesCount = (styleRefs.length > 0 ? 1 : 0) + (artistPhoto ? 1 : 0);
+  const estCostUsd = Number((0.015 + inputImagesCount * 0.002).toFixed(6));
+  const attemptRef = `${jobId}_v${versionIndex}_r${retryNumber}_cf`;
 
   const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
   const apiToken = (process.env.CLOUDFLARE_API_TOKEN || '').trim();
 
+  // Handle missing credentials
   if (!accountId || !apiToken) {
     if (isLiveMode()) {
-      throw new Error('PROVIDER_KEY_MISSING: Cloudflare credentials required for Standard Cover Art');
+      throw new Error('PROVIDER_KEY_MISSING: Cloudflare credentials required for Standard Cover Art in live mode');
     }
-    return generateLocalMockArtwork(prompt, 'FLUX.2 Klein 9B (Simulated)', versionIndex);
+    return generateLocalMockArtwork(prompt, 'FLUX.2 Klein 9B (Dev Simulated)', versionIndex, true);
   }
 
-  // Budget mutex and reservation
+  // Supplier Budget check & reservation
+  let reservationResult = 'ok' as 'ok' | 'cap_reached' | 'tripped';
   await withSupplierBudgetMutex('cloudflare', async () => {
-    const budgetOk = await reserveSupplierBudget('cloudflare', estCostUsd);
-    if (!budgetOk) {
-      throw new Error('SUPPLIER_BUDGET_EXCEEDED: Cloudflare budget cap reached');
-    }
+    reservationResult = await reserveSupplierBudget('cloudflare', estCostUsd, 1, 'image');
   });
+
+  if (reservationResult === 'cap_reached') {
+    if (!isLiveMode()) {
+      console.warn('[CoverArt Cloudflare] Dev supplier cap reached, using simulated local art');
+      return generateLocalMockArtwork(prompt, 'FLUX.2 Klein 9B (Cap Simulated)', versionIndex, true);
+    }
+    throw new Error('SUPPLIER_BUDGET_EXCEEDED: Cloudflare budget cap reached');
+  } else if (reservationResult === 'tripped') {
+    throw new Error('SUPPLIER_TRIPPED: Cloudflare circuit breaker is currently active');
+  }
 
   await recordAttempt({
     userId,
     jobId,
+    variantIndex: versionIndex,
     supplier: 'cloudflare',
     modelId: 'img_cf_flux2_klein_9b',
-    generationType: 'image',
-    estimatedCostUsd: estCostUsd,
-    attemptReference: attemptRef,
+    upstreamModel,
+    env: isLiveMode() ? 'prod' : 'dev',
+    units: 1,
+    unitLabel: 'image',
+    estCostUsd,
   });
 
-  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${upstreamModel}`;
+  // Prepare reference images order:
+  // input_image_0 = style ref
+  // input_image_1 = artist photo
+  const refImagesList: { buffer: Buffer; mime: string }[] = [];
+  if (styleRefs.length > 0) {
+    refImagesList.push(styleRefs[0]);
+  }
+  if (artistPhoto) {
+    refImagesList.push(artistPhoto);
+  }
+
+  let finalPrompt = prompt;
+  if (styleRefs.length > 0 && artistPhoto) {
+    finalPrompt = `Take the subject of image 1 and style it like image 0. ${prompt}`;
+  }
 
   try {
-    const form = new FormData();
-    form.append('prompt', prompt.slice(0, 2048));
-    form.append('width', '1024');
-    form.append('height', '1024');
-    form.append('steps', '4');
-
-    if (referencePhotoBuffer && referencePhotoBuffer.length > 0) {
-      // Cloudflare input image
-      const photoBlob = new Blob([new Uint8Array(referencePhotoBuffer)], { type: 'image/jpeg' });
-      form.append('image', photoBlob, 'reference.jpg');
-    }
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-      },
-      body: form,
-      signal: AbortSignal.timeout(60000),
+    const cfResult = await callCloudflareSingleImage({
+      upstreamModel,
+      prompt: finalPrompt,
+      aspectRatio: '1:1',
+      referenceImages: refImagesList,
     });
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`Cloudflare error HTTP ${response.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const ct = (response.headers.get('content-type') || '').toLowerCase();
-    let imageBuffer: Buffer;
-    let mimeType: 'image/png' | 'image/jpeg' = 'image/jpeg';
-
-    if (ct.includes('application/json')) {
-      const json: any = await response.json();
-      const b64 = json?.result?.image || json?.result?.response || json?.image;
-      if (!b64) throw new Error('Cloudflare response missing image bytes');
-      imageBuffer = Buffer.from(b64, 'base64');
-    } else {
-      const arrayBuf = await response.arrayBuffer();
-      imageBuffer = Buffer.from(arrayBuf);
-      if (ct.includes('png')) mimeType = 'image/png';
-    }
-
-    await markSucceeded(attemptRef, estCostUsd);
+    await markSucceeded(jobId, versionIndex, 'cloudflare', estCostUsd);
     recordProviderSuccess('cloudflare');
 
     return {
-      imageBuffer,
-      mimeType,
+      imageBuffer: cfResult.buffer,
+      mimeType: cfResult.extension === 'png' ? 'image/png' : 'image/jpeg',
       engineUsed: 'FLUX.2 Klein 9B',
       supplier: 'cloudflare',
       costUsd: estCostUsd,
     };
   } catch (err: any) {
-    await markFailed(attemptRef, err?.message || 'Cloudflare call failed');
-    recordProviderFailure('cloudflare', err);
+    const rawMsg = err?.message || '';
+    await markFailed(jobId, versionIndex, 'cloudflare', redactSecrets(rawMsg));
+    recordProviderFailure('cloudflare', rawMsg);
+
+    if (isSafetyFilterMessage(rawMsg)) {
+      throw new Error(
+        'SAFETY_FILTER: Generation was flagged by safety moderation. Please try a different artist photo or visual style.'
+      );
+    }
     throw err;
   }
 }
 
 /**
- * Executes image generation on Google Gemini (Nano Banana 2 or Nano Banana 2 Lite).
+ * Dedicated Google call for Cover Art (Nano Banana 2 or NB2 Lite).
  */
-async function executeGoogleImageVariant(
+async function executeGoogleCoverCall(
   params: EngineExecutionParams & {
+    googleCatalogId: string;
     googleModelId: string;
     estCostUsd: number;
     engineLabel: string;
   }
 ): Promise<EngineExecutionResult> {
-  const { prompt, referencePhotoBuffer, referencePhotoMime, userId, jobId, versionIndex, googleModelId, estCostUsd, engineLabel } = params;
-  const attemptRef = `${jobId}_v${versionIndex}_google`;
+  const { prompt, styleRefs = [], artistPhoto, userId, jobId, versionIndex, retryNumber = 0, googleCatalogId, googleModelId, estCostUsd, engineLabel } = params;
+  const attemptRef = `${jobId}_v${versionIndex}_r${retryNumber}_google`;
   const ai = getGemini();
 
   if (!process.env.GEMINI_API_KEY || !ai) {
     if (isLiveMode()) {
-      throw new Error('PROVIDER_KEY_MISSING: Gemini API key required for Cover Art');
+      throw new Error('PROVIDER_KEY_MISSING: Gemini API key required in live mode');
     }
-    return generateLocalMockArtwork(prompt, `${engineLabel} (Simulated)`, versionIndex);
+    return generateLocalMockArtwork(prompt, `${engineLabel} (Dev Simulated)`, versionIndex, true);
   }
 
-  // Budget check
+  // Budget reservation
+  let reservationResult = 'ok' as 'ok' | 'cap_reached' | 'tripped';
   await withSupplierBudgetMutex('google', async () => {
-    const budgetOk = await reserveSupplierBudget('google', estCostUsd);
-    if (!budgetOk) {
-      throw new Error('SUPPLIER_BUDGET_EXCEEDED: Google supplier budget cap reached');
-    }
+    reservationResult = await reserveSupplierBudget('google', estCostUsd, 1, 'image');
   });
+
+  if (reservationResult === 'cap_reached') {
+    if (!isLiveMode()) {
+      console.warn('[CoverArt Google] Dev supplier cap reached, using simulated local art');
+      return generateLocalMockArtwork(prompt, `${engineLabel} (Cap Simulated)`, versionIndex, true);
+    }
+    throw new Error('SUPPLIER_BUDGET_EXCEEDED: Google supplier budget cap reached');
+  } else if (reservationResult === 'tripped') {
+    throw new Error('SUPPLIER_TRIPPED: Google circuit breaker is currently active');
+  }
 
   await recordAttempt({
     userId,
     jobId,
+    variantIndex: versionIndex,
     supplier: 'google',
-    modelId: googleModelId === 'gemini-3.1-flash-lite-image' ? 'img_nano_banana_2_lite' : 'img_nano_banana_2',
-    generationType: 'image',
-    estimatedCostUsd: estCostUsd,
-    attemptReference: attemptRef,
+    modelId: googleCatalogId,
+    env: isLiveMode() ? 'prod' : 'dev',
+    units: 1,
+    unitLabel: 'image',
+    estCostUsd,
   });
 
   try {
-    const parts: any[] = [{ text: prompt }];
+    const parts: any[] = [];
 
-    if (referencePhotoBuffer && referencePhotoBuffer.length > 0) {
+    // Attach artist photo first if present
+    if (artistPhoto && artistPhoto.buffer.length > 0) {
       parts.push({
         inlineData: {
-          data: referencePhotoBuffer.toString('base64'),
-          mimeType: referencePhotoMime || 'image/jpeg',
+          mimeType: artistPhoto.mime || 'image/jpeg',
+          data: artistPhoto.buffer.toString('base64'),
         },
       });
     }
 
+    // Attach style reference if present
+    if (styleRefs.length > 0 && styleRefs[0].buffer.length > 0) {
+      parts.push({
+        inlineData: {
+          mimeType: styleRefs[0].mime || 'image/jpeg',
+          data: styleRefs[0].buffer.toString('base64'),
+        },
+      });
+    }
+
+    // Attach prompt
+    parts.push({ text: prompt });
+
+    const resolvedModel = resolveGoogleModelId(googleCatalogId, googleModelId);
     const resp = await ai.models.generateContent({
-      model: googleModelId,
+      model: resolvedModel,
       contents: { parts },
       config: {
         imageConfig: {
@@ -276,13 +324,20 @@ async function executeGoogleImageVariant(
     const imagePart = candidate?.content?.parts?.find((p: any) => p.inlineData?.data);
 
     if (!imagePart?.inlineData?.data) {
+      // Check for safety filter block
+      const finishReason = candidate?.finishReason || '';
+      if (isSafetyFilterMessage(finishReason) || finishReason === 'SAFETY') {
+        throw new Error(
+          'SAFETY_FILTER: Image generation was blocked by safety filters. Try using a different artist photo or style preset.'
+        );
+      }
       throw new Error('Google generation returned no image payload');
     }
 
     const imageBuffer = Buffer.from(imagePart.inlineData.data, 'base64');
     const mimeType = (imagePart.inlineData.mimeType || 'image/png') as 'image/png' | 'image/jpeg';
 
-    await markSucceeded(attemptRef, estCostUsd);
+    await markSucceeded(jobId, versionIndex, 'google', estCostUsd);
     recordProviderSuccess('google');
 
     return {
@@ -293,52 +348,55 @@ async function executeGoogleImageVariant(
       costUsd: estCostUsd,
     };
   } catch (err: any) {
-    await markFailed(attemptRef, err?.message || 'Google call failed');
-    recordProviderFailure('google', err);
+    const msg = redactSecrets(err?.message || '');
+    await markFailed(jobId, versionIndex, 'google', msg);
+    recordProviderFailure('google', msg);
+
+    if (isSafetyFilterMessage(msg)) {
+      throw new Error(
+        'SAFETY_FILTER: Generation was flagged by safety moderation. Please try a different artist photo or visual style.'
+      );
+    }
     throw err;
   }
 }
 
 /**
- * Creates high-aesthetic local placeholder artwork for demo / keyless mode.
+ * Local SVG artwork placeholder for dev / keyless / budget-capped mode.
  */
 async function generateLocalMockArtwork(
   prompt: string,
   engineName: string,
-  variationIndex: number
+  versionIndex: number,
+  isSimulated = false
 ): Promise<EngineExecutionResult> {
-  const colors = [
+  const palettes = [
     { start: '#F86A00', mid: '#FF8800', end: '#121214', disc: '#FFB020' },
     { start: '#7928CA', mid: '#FF0080', end: '#0D0E15', disc: '#00DFD8' },
   ];
-  const c = colors[variationIndex % colors.length];
+  const p = palettes[versionIndex % palettes.length];
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
     <defs>
-      <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="${c.start}"/>
-        <stop offset="45%" stop-color="${c.mid}"/>
-        <stop offset="100%" stop-color="${c.end}"/>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${p.start}"/>
+        <stop offset="50%" stop-color="${p.mid}"/>
+        <stop offset="100%" stop-color="${p.end}"/>
       </linearGradient>
-      <radialGradient id="halo" cx="50%" cy="40%" r="55%">
-        <stop offset="0%" stop-color="${c.disc}" stop-opacity="0.85"/>
-        <stop offset="60%" stop-color="${c.start}" stop-opacity="0.4"/>
-        <stop offset="100%" stop-color="${c.end}" stop-opacity="0"/>
+      <radialGradient id="sun" cx="50%" cy="38%" r="45%">
+        <stop offset="0%" stop-color="${p.disc}" stop-opacity="0.9"/>
+        <stop offset="60%" stop-color="${p.start}" stop-opacity="0.3"/>
+        <stop offset="100%" stop-color="${p.end}" stop-opacity="0"/>
       </radialGradient>
-      <filter id="noise">
-        <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
-        <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.08 0"/>
-        <feBlend mode="overlay" in2="SourceGraphic"/>
-      </filter>
     </defs>
-    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
-    <circle cx="512" cy="460" r="380" fill="url(#halo)"/>
-    <circle cx="512" cy="460" r="260" fill="${c.end}" opacity="0.6"/>
-    <circle cx="512" cy="460" r="160" stroke="${c.disc}" stroke-width="3" fill="none" opacity="0.5"/>
-    <circle cx="512" cy="460" r="60" fill="${c.disc}" opacity="0.9"/>
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <circle cx="512" cy="420" r="320" fill="url(#sun)"/>
+    <circle cx="512" cy="420" r="220" fill="${p.end}" opacity="0.6"/>
+    <circle cx="512" cy="420" r="140" stroke="${p.disc}" stroke-width="4" fill="none" opacity="0.5"/>
+    <rect x="0" y="700" width="1024" height="324" fill="#000000" opacity="0.6"/>
   </svg>`;
 
-  const buffer = await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toBuffer();
+  const buffer = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
 
   return {
     imageBuffer: buffer,
@@ -346,5 +404,6 @@ async function generateLocalMockArtwork(
     engineUsed: engineName,
     supplier: 'mock',
     costUsd: 0,
+    isSimulated,
   };
 }
